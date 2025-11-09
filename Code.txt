@@ -22,6 +22,15 @@ const HEADER_MAP = {
   viewability: 'Viewability',
 };
 const CONFIG_HEADERS = ['ID','Pessoa','Operação','PaginaQueda','Parte','Canal','URLs (;)','Rede','Moeda'];
+const AUTO_PRICING_CONFIG_SHEET = 'Config - Precificação';
+const AUTO_PRICING_LOG_SHEET = 'Log - Precificação';
+const AUTO_PRICING_INTERVAL_HOURS = 3; // intervalo padrão entre execuções automáticas
+const AUTO_PRICING_WINDOW_HOURS = 3; // quantidade de horas utilizadas na análise
+const AUTO_PRICING_MIN_REQUESTS = 10; // solicitações mínimas para atualizar uma regra
+const AUTO_PRICING_RANGE_HEADER = ['Cobertura Superior','Cobertura Inferior','Coeficiente'];
+const AUTO_PRICING_SITE_HEADER = ['Site','utm_source (separe por ;)','Ativo?'];
+const AUTO_PRICING_BUCKET_HEADER = ['Site','Buckets disponíveis (JSON ou separados por ;)'];
+const AUTO_PRICING_LOG_HEADERS = ['Timestamp','Disparo','Site','UTM Source','URL','Regra Atual','Nova Regra','Cobertura (%)','eCPM','Coeficiente','Bucket Aplicado','Solicitações','Observações'];
 
 function doGet() {
   return HtmlService.createTemplateFromFile('index')
@@ -97,6 +106,46 @@ function ensurePricingSheetIgoal_() {
   return sh;
 }
 
+function ensureAutoPricingConfigSheet_() {
+  const ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(AUTO_PRICING_CONFIG_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(AUTO_PRICING_CONFIG_SHEET);
+    var defaultRows = [];
+    function pushRow(arr) {
+      var row = (arr || []).slice();
+      while (row.length < 3) row.push('');
+      defaultRows.push(row);
+    }
+
+    pushRow(AUTO_PRICING_RANGE_HEADER);
+    [[100,95,1.30],[95,90,1.20],[90,85,1.15],[85,78,1.10],[78,72,1.00],[72,65,0.90],[65,60,0.85],[60,55,0.80],[55,50,0.75],[50,45,0.70],[45,40,0.65],[40,35,0.60],[35,30,0.55],[30,0,0.50]].forEach(function(row){ pushRow(row); });
+    pushRow([]);
+    pushRow(AUTO_PRICING_SITE_HEADER);
+    pushRow(['exemplo.com','utm_a;utm_b','TRUE']);
+    pushRow([]);
+    pushRow(AUTO_PRICING_BUCKET_HEADER);
+    pushRow(['exemplo.com','["0.13","0.14","0.15","0.16"]']);
+
+    if (defaultRows.length) {
+      sh.getRange(1,1,defaultRows.length,defaultRows[0].length).setValues(defaultRows);
+    }
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
+function ensureAutoPricingLogSheet_() {
+  const ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(AUTO_PRICING_LOG_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(AUTO_PRICING_LOG_SHEET);
+    sh.getRange(1,1,1,AUTO_PRICING_LOG_HEADERS.length).setValues([AUTO_PRICING_LOG_HEADERS]);
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
 function getHeaderIndexMap_(headers) {
   var map = {};
   for (var i=0;i<headers.length;i++) map[String(headers[i]).trim()] = i;
@@ -133,6 +182,12 @@ function normUrlStrict_(u) {
   s = s.split('?')[0];
   s = s.replace(/\/+$/,'');
   return s;
+}
+function normSite_(val) {
+  return String(val == null ? '' : val).trim().toLowerCase();
+}
+function normUtm_(val) {
+  return String(val == null ? '' : val).trim().toLowerCase();
 }
 function parseDate_(v) {
   if (v instanceof Date) return v;
@@ -361,6 +416,769 @@ function upsertPricingRulesIgoal(rules) {
   return { ok: true, rules: updatedRules };
 }
 
+/* ============= PRECIFICAÇÃO AUTOMÁTICA ============= */
+function rowMatchesHeader_(row, header) {
+  if (!row || !header) return false;
+  for (var i = 0; i < header.length; i++) {
+    if (String(row[i] || '').trim() !== String(header[i] || '').trim()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function parseAutoPricingBoolean_(value) {
+  if (value === true) return true;
+  if (value === false) return false;
+  var s = String(value || '').trim().toLowerCase();
+  if (!s) return true;
+  if (['false','0','no','não','nao','off','inactive','desligado'].indexOf(s) !== -1) return false;
+  return true;
+}
+
+function parseBucketsValue_(value) {
+  if (value == null) return [];
+  if (Array.isArray(value)) {
+    return value.map(function(v){ return String(v || '').trim(); }).filter(function(v){ return !!v; });
+  }
+  var s = String(value || '').trim();
+  if (!s) return [];
+  if (s.charAt(0) === '[') {
+    try {
+      var arr = JSON.parse(s);
+      if (Array.isArray(arr)) {
+        return arr.map(function(v){ return String(v || '').trim(); }).filter(function(v){ return !!v; });
+      }
+    } catch (err) {
+      // mantém fallback
+    }
+  }
+  return s.split(/[,;\n]/).map(function(v){ return String(v || '').trim(); }).filter(function(v){ return !!v; });
+}
+
+function loadAutoPricingConfig_() {
+  var sh = ensureAutoPricingConfigSheet_();
+  var values = sh.getDataRange().getValues();
+  var config = { ranges: [], sites: [], buckets: [] };
+  var section = '';
+  values.forEach(function(row){
+    if (!row) return;
+    if (rowMatchesHeader_(row, AUTO_PRICING_RANGE_HEADER)) { section = 'ranges'; return; }
+    if (rowMatchesHeader_(row, AUTO_PRICING_SITE_HEADER)) { section = 'sites'; return; }
+    if (rowMatchesHeader_(row, AUTO_PRICING_BUCKET_HEADER)) { section = 'buckets'; return; }
+    var isEmpty = row.every(function(cell){ return String(cell || '').trim() === ''; });
+    if (isEmpty) return;
+    if (section === 'ranges') {
+      var upper = toNumber_(row[0]);
+      var lower = toNumber_(row[1]);
+      var coefficient = toNumber_(row[2]);
+      if (isFinite(upper) && isFinite(lower) && isFinite(coefficient)) {
+        config.ranges.push({ upper: upper, lower: lower, coefficient: coefficient });
+      }
+    } else if (section === 'sites') {
+      var site = String(row[0] || '').trim();
+      if (!site) return;
+      var utmParts = parseBucketsValue_(row[1]);
+      var active = parseAutoPricingBoolean_(row[2]);
+      config.sites.push({ site: site, utmSources: utmParts, active: active });
+    } else if (section === 'buckets') {
+      var bucketSite = String(row[0] || '').trim();
+      if (!bucketSite) return;
+      var bucketValues = parseBucketsValue_(row[1]);
+      config.buckets.push({ site: bucketSite, buckets: bucketValues });
+    }
+  });
+  return config;
+}
+
+function buildAutoPricingContext_() {
+  var config = loadAutoPricingConfig_();
+  var ranges = (config.ranges || []).slice().filter(function(r){
+    return isFinite(r.upper) && isFinite(r.lower) && isFinite(r.coefficient);
+  });
+  ranges.sort(function(a,b){ return (b.upper || 0) - (a.upper || 0); });
+
+  var combosMap = {};
+  (config.sites || []).forEach(function(entry){
+    if (!entry || !entry.site) return;
+    var siteName = String(entry.site).trim();
+    var normSite = normSite_(siteName);
+    if (!normSite) return;
+    var utmList = Array.isArray(entry.utmSources) ? entry.utmSources : [];
+    var active = parseAutoPricingBoolean_(entry.active);
+    utmList.forEach(function(utm){
+      var normUtm = normUtm_(utm);
+      if (!normUtm) return;
+      var key = normSite + '||' + normUtm;
+      if (!combosMap[key]) {
+        combosMap[key] = { site: siteName, normSite: normSite, utm_source: utm, normUtm: normUtm, active: active };
+      } else {
+        combosMap[key].active = combosMap[key].active || active;
+        if (!combosMap[key].utm_source && utm) combosMap[key].utm_source = utm;
+      }
+    });
+  });
+
+  var combos = Object.keys(combosMap).map(function(key){ return combosMap[key]; }).filter(function(item){
+    return parseAutoPricingBoolean_(item.active);
+  });
+  combos.sort(function(a,b){
+    var s = String(a.site || '').localeCompare(String(b.site || ''), 'pt-BR');
+    if (s !== 0) return s;
+    return String(a.utm_source || '').localeCompare(String(b.utm_source || ''), 'pt-BR');
+  });
+
+  var siteOptionsMap = {};
+  var utmOptionsMap = {};
+  combos.forEach(function(combo){
+    if (!siteOptionsMap[combo.normSite]) siteOptionsMap[combo.normSite] = combo.site;
+    if (!utmOptionsMap[combo.normUtm]) utmOptionsMap[combo.normUtm] = combo.utm_source;
+  });
+
+  var siteOptions = Object.keys(siteOptionsMap).map(function(key){
+    return { site: siteOptionsMap[key], normSite: key };
+  }).sort(function(a,b){
+    return String(a.site || '').localeCompare(String(b.site || ''), 'pt-BR');
+  });
+
+  var utmOptions = Object.keys(utmOptionsMap).map(function(key){
+    return { utm_source: utmOptionsMap[key], normUtm: key };
+  }).sort(function(a,b){
+    return String(a.utm_source || '').localeCompare(String(b.utm_source || ''), 'pt-BR');
+  });
+
+  var bucketMap = {};
+  (config.buckets || []).forEach(function(entry){
+    if (!entry || !entry.site) return;
+    var siteName = String(entry.site).trim();
+    var normSite = normSite_(siteName);
+    if (!normSite) return;
+    var buckets = Array.isArray(entry.buckets) ? entry.buckets : [];
+    var pairs = [];
+    buckets.forEach(function(value){
+      var str = String(value || '').trim();
+      if (!str) return;
+      var num = toNumber_(str);
+      if (!isFinite(num)) return;
+      pairs.push({ label: str, value: num });
+    });
+    pairs.sort(function(a,b){ return a.value - b.value; });
+    bucketMap[normSite] = {
+      labels: pairs.map(function(p){ return p.label; }),
+      values: pairs.map(function(p){ return p.value; })
+    };
+  });
+
+  return {
+    config: config,
+    ranges: ranges,
+    combos: combos,
+    siteOptions: siteOptions,
+    utmOptions: utmOptions,
+    bucketMap: bucketMap
+  };
+}
+
+function getIgoalRuleContext_() {
+  var sh = ensurePricingSheetIgoal_();
+  var values = sh.getDataRange().getValues();
+  var headers = values.shift() || [];
+  var idx = getHeaderIndexMap_(headers);
+  var map = {};
+  if (values.length) {
+    values.forEach(function(row, index){
+      var dominio = row[idx['dominio']];
+      var utm = row[idx['utm_source']];
+      var url = row[idx['url']];
+      var key = normSite_(dominio) + '||' + normUtm_(utm) + '||' + normUrlStrict_(url);
+      map[key] = {
+        price_rule: toNumber_(row[idx['price_rule']]),
+        rowIndex: index + 2,
+        dominio: dominio,
+        utm_source: utm,
+        url: url,
+        bloco: row[idx['bloco']],
+        company_id: row[idx['company_id']],
+        rule_id: row[idx['rule_id']]
+      };
+    });
+  }
+  return {
+    sheet: sh,
+    headers: headers,
+    idx: idx,
+    map: map,
+    syncCol: headers.indexOf('Sincronizar')
+  };
+}
+
+function formatHourLabelAuto_(ms) {
+  if (ms == null) return '';
+  var tz = Session.getScriptTimeZone();
+  return Utilities.formatDate(new Date(ms), tz, "dd/MM HH'h'");
+}
+
+function createNormalizedSet_(arr, normalizer) {
+  if (!arr || !arr.length) return null;
+  var set = {};
+  arr.forEach(function(item){
+    var norm = normalizer ? normalizer(item) : String(item || '').trim();
+    if (norm) set[norm] = true;
+  });
+  return Object.keys(set).length ? set : null;
+}
+
+function findCoefficientForCoverage_(coverage, ranges) {
+  var cov = isFinite(coverage) ? coverage : 0;
+  for (var i = 0; i < ranges.length; i++) {
+    var range = ranges[i] || {};
+    var upper = isFinite(range.upper) ? range.upper : 0;
+    var lower = isFinite(range.lower) ? range.lower : 0;
+    if (cov <= upper + 1e-9 && cov >= lower - 1e-9) {
+      return range.coefficient;
+    }
+  }
+  return ranges.length ? ranges[0].coefficient : 1;
+}
+
+function chooseBucketValue_(targetValue, bucketEntry) {
+  if (!bucketEntry || !bucketEntry.values || !bucketEntry.values.length) {
+    return { value: null, label: null };
+  }
+  var values = bucketEntry.values;
+  var labels = bucketEntry.labels;
+  var best = null;
+  for (var i = 0; i < values.length; i++) {
+    var current = values[i];
+    if (!isFinite(current)) continue;
+    if (targetValue == null || isNaN(targetValue)) {
+      if (best == null) best = current;
+      continue;
+    }
+    if (current <= targetValue + 1e-9) {
+      if (best == null || current > best) {
+        best = current;
+      }
+    }
+  }
+  if (best == null) {
+    best = values[0];
+  }
+  var label = null;
+  if (labels && labels.length) {
+    for (var j = 0; j < values.length; j++) {
+      if (Math.abs(values[j] - best) <= 1e-9) {
+        label = labels[j];
+        break;
+      }
+    }
+  }
+  if (label == null) label = best != null ? String(best) : '';
+  return { value: best, label: label };
+}
+
+function nearlyEqual_(a, b, tolerance) {
+  if (!isFinite(a) && !isFinite(b)) return true;
+  if (!isFinite(a) || !isFinite(b)) return false;
+  var tol = tolerance == null ? 0.0001 : tolerance;
+  return Math.abs(a - b) <= tol;
+}
+
+function computeAutoPricingPlan_(params) {
+  params = params || {};
+  var context = buildAutoPricingContext_();
+  var ruleContext = getIgoalRuleContext_();
+  var combos = context.combos || [];
+  if (!combos.length) {
+    return {
+      context: context,
+      ruleContext: ruleContext,
+      analysis: {
+        generatedAt: Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm:ss'),
+        entries: [],
+        siteRows: [],
+        utmRows: [],
+        windowHours: [],
+        excludedHour: null,
+        summary: { totalEntries: 0, eligibleUpdates: 0 }
+      }
+    };
+  }
+
+  var siteFilterSet = createNormalizedSet_(params.sites || params.siteFilter, normSite_);
+  var utmFilterSet = createNormalizedSet_(params.utm_sources || params.utmSources, normUtm_);
+
+  var allowedComboMap = {};
+  combos.forEach(function(combo){
+    if (siteFilterSet && !siteFilterSet[combo.normSite]) return;
+    if (utmFilterSet && !utmFilterSet[combo.normUtm]) return;
+    allowedComboMap[combo.normSite + '||' + combo.normUtm] = combo;
+  });
+
+  if (!Object.keys(allowedComboMap).length) {
+    combos.forEach(function(combo){
+      allowedComboMap[combo.normSite + '||' + combo.normUtm] = combo;
+    });
+  }
+
+  var baseSheet = SpreadsheetApp.getActive().getSheetByName('BD - GAM') || getBaseSheet_();
+  var data = baseSheet.getDataRange().getValues();
+  if (!data.length) {
+    return {
+      context: context,
+      ruleContext: ruleContext,
+      analysis: {
+        generatedAt: Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm:ss'),
+        entries: [],
+        siteRows: [],
+        utmRows: [],
+        windowHours: [],
+        excludedHour: null,
+        summary: { totalEntries: 0, eligibleUpdates: 0 }
+      }
+    };
+  }
+
+  var headers = data[0] || [];
+  var idx = getHeaderIndexMap_(headers);
+  var requiredCols = [HEADER_MAP.date, HEADER_MAP.hour, HEADER_MAP.site, HEADER_MAP.channel, HEADER_MAP.url, HEADER_MAP.requests, HEADER_MAP.coverage, HEADER_MAP.ecpm, HEADER_MAP.revenue];
+  for (var c = 0; c < requiredCols.length; c++) {
+    if (idx[requiredCols[c]] == null) {
+      throw new Error('Coluna obrigatória ausente na base de dados: ' + requiredCols[c]);
+    }
+  }
+
+  var hourSet = {};
+  var rows = [];
+  var values = data.slice(1);
+  values.forEach(function(row){
+    var dateVal = row[idx[HEADER_MAP.date]];
+    var hourVal = row[idx[HEADER_MAP.hour]];
+    var siteVal = row[idx[HEADER_MAP.site]];
+    var utmVal = row[idx[HEADER_MAP.channel]];
+    var urlVal = row[idx[HEADER_MAP.url]];
+    var normSite = normSite_(siteVal);
+    var normUtm = normUtm_(utmVal);
+    var comboKey = normSite + '||' + normUtm;
+    if (!allowedComboMap[comboKey]) return;
+    var dateObj = parseDate_(dateVal);
+    if (!dateObj) return;
+    var hourNumber = parseInt(hourVal, 10);
+    if (isNaN(hourNumber)) return;
+    var ms = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate(), hourNumber, 0, 0, 0).getTime();
+    hourSet[ms] = true;
+    rows.push({
+      ms: ms,
+      site: String(siteVal || ''),
+      normSite: normSite,
+      utm_source: String(utmVal || ''),
+      normUtm: normUtm,
+      url: String(urlVal || ''),
+      normUrl: normUrlStrict_(urlVal),
+      requests: toNumber_(row[idx[HEADER_MAP.requests]]),
+      coverage: toNumber_(row[idx[HEADER_MAP.coverage]]),
+      ecpm: toNumber_(row[idx[HEADER_MAP.ecpm]]),
+      revenue: toNumber_(row[idx[HEADER_MAP.revenue]])
+    });
+  });
+
+  var sortedHours = Object.keys(hourSet).map(function(k){ return +k; }).sort(function(a,b){ return a - b; });
+  if (!sortedHours.length) {
+    return {
+      context: context,
+      ruleContext: ruleContext,
+      analysis: {
+        generatedAt: Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm:ss'),
+        entries: [],
+        siteRows: [],
+        utmRows: [],
+        windowHours: [],
+        excludedHour: null,
+        summary: { totalEntries: 0, eligibleUpdates: 0 }
+      }
+    };
+  }
+
+  var excludedHour = sortedHours.length ? sortedHours[sortedHours.length - 1] : null;
+  var considered = sortedHours.slice(0, Math.max(0, sortedHours.length - 1));
+  var windowHours = [];
+  for (var h = considered.length - 1; h >= 0 && windowHours.length < AUTO_PRICING_WINDOW_HOURS; h--) {
+    windowHours.unshift(considered[h]);
+  }
+  if (!windowHours.length) {
+    windowHours = considered.slice(-AUTO_PRICING_WINDOW_HOURS);
+  }
+  var windowHourSet = {};
+  windowHours.forEach(function(ms){ windowHourSet[ms] = true; });
+
+  var comboAgg = {};
+  rows.forEach(function(row){
+    if (!windowHourSet[row.ms]) return;
+    var key = row.normSite + '||' + row.normUtm + '||' + row.normUrl;
+    if (!comboAgg[key]) {
+      comboAgg[key] = {
+        site: row.site,
+        normSite: row.normSite,
+        utm_source: row.utm_source,
+        normUtm: row.normUtm,
+        url: row.url,
+        normUrl: row.normUrl,
+        requests: 0,
+        coverageWeighted: 0,
+        ecpmWeighted: 0,
+        revenue: 0,
+        hours: {}
+      };
+    }
+    var agg = comboAgg[key];
+    var req = row.requests || 0;
+    agg.requests += req;
+    if (req > 0) {
+      agg.coverageWeighted += (row.coverage || 0) * req;
+      agg.ecpmWeighted += (row.ecpm || 0) * req;
+    }
+    agg.revenue += row.revenue || 0;
+    agg.hours[row.ms] = true;
+  });
+
+  var entries = [];
+  var seenKeys = {};
+  Object.keys(comboAgg).forEach(function(key){
+    var agg = comboAgg[key];
+    var requests = agg.requests || 0;
+    var avgCoverage = requests > 0 ? (agg.coverageWeighted / requests) : 0;
+    var avgEcpm = requests > 0 ? (agg.ecpmWeighted / requests) : 0;
+    var coefficient = findCoefficientForCoverage_(avgCoverage, context.ranges);
+    var computedRule = avgEcpm * coefficient;
+    var bucketInfo = chooseBucketValue_(computedRule, context.bucketMap[agg.normSite]);
+    var ruleInfo = ruleContext.map[key];
+    var currentRule = ruleInfo ? ruleInfo.price_rule : 0;
+    var eligible = requests >= AUTO_PRICING_MIN_REQUESTS && bucketInfo.value != null;
+    var shouldUpdate = eligible && !nearlyEqual_(currentRule, bucketInfo.value);
+    var reason = '';
+    if (!requests) reason = 'Sem dados nas últimas horas';
+    else if (requests < AUTO_PRICING_MIN_REQUESTS) reason = 'Solicitações insuficientes';
+    else if (bucketInfo.value == null) reason = 'Sem bucket disponível';
+    else if (!shouldUpdate) reason = 'Regra atualizada';
+    entries.push({
+      key: key,
+      site: agg.site,
+      normSite: agg.normSite,
+      utm_source: agg.utm_source,
+      normUtm: agg.normUtm,
+      url: agg.url,
+      normUrl: agg.normUrl,
+      requests: requests,
+      coverage: avgCoverage,
+      ecpm: avgEcpm,
+      coefficient: coefficient,
+      computedRule: computedRule,
+      bucketRule: bucketInfo.value,
+      bucketLabel: bucketInfo.label,
+      currentRule: currentRule,
+      eligible: eligible,
+      shouldUpdate: shouldUpdate,
+      reason: reason,
+      hoursUsed: Object.keys(agg.hours).map(function(ms){ return formatHourLabelAuto_(+ms); }).sort(),
+      windowHours: windowHours.map(formatHourLabelAuto_)
+    });
+    seenKeys[key] = true;
+  });
+
+  Object.keys(ruleContext.map).forEach(function(key){
+    if (seenKeys[key]) return;
+    var parts = key.split('||');
+    if (parts.length < 3) return;
+    var normSite = parts[0];
+    var normUtm = parts[1];
+    var comboKey = normSite + '||' + normUtm;
+    if (!allowedComboMap[comboKey]) return;
+    var info = ruleContext.map[key];
+    entries.push({
+      key: key,
+      site: info.dominio,
+      normSite: normSite,
+      utm_source: info.utm_source,
+      normUtm: normUtm,
+      url: info.url,
+      normUrl: normUrlStrict_(info.url),
+      requests: 0,
+      coverage: 0,
+      ecpm: 0,
+      coefficient: findCoefficientForCoverage_(0, context.ranges),
+      computedRule: 0,
+      bucketRule: null,
+      bucketLabel: null,
+      currentRule: info.price_rule,
+      eligible: false,
+      shouldUpdate: false,
+      reason: 'Sem dados nas últimas horas',
+      hoursUsed: [],
+      windowHours: windowHours.map(formatHourLabelAuto_)
+    });
+  });
+
+  entries.sort(function(a,b){
+    var siteCmp = String(a.site || '').localeCompare(String(b.site || ''), 'pt-BR');
+    if (siteCmp !== 0) return siteCmp;
+    var utmCmp = String(a.utm_source || '').localeCompare(String(b.utm_source || ''), 'pt-BR');
+    if (utmCmp !== 0) return utmCmp;
+    return String(a.url || '').localeCompare(String(b.url || ''), 'pt-BR');
+  });
+
+  var siteAgg = {};
+  var utmAgg = {};
+  entries.forEach(function(entry){
+    var keySite = entry.normSite;
+    if (!siteAgg[keySite]) {
+      siteAgg[keySite] = {
+        site: entry.site,
+        normSite: entry.normSite,
+        requests: 0,
+        coverageWeighted: 0,
+        ecpmWeighted: 0,
+        currentWeighted: 0,
+        utmSet: {}
+      };
+    }
+    var siteItem = siteAgg[keySite];
+    var req = entry.requests || 0;
+    siteItem.requests += req;
+    if (req > 0) {
+      siteItem.coverageWeighted += (entry.coverage || 0) * req;
+      siteItem.ecpmWeighted += (entry.ecpm || 0) * req;
+      siteItem.currentWeighted += (entry.currentRule || 0) * req;
+    }
+    if (entry.utm_source) siteItem.utmSet[entry.normUtm] = entry.utm_source;
+
+    var keyUtm = entry.normSite + '||' + entry.normUtm;
+    if (!utmAgg[keyUtm]) {
+      utmAgg[keyUtm] = {
+        site: entry.site,
+        normSite: entry.normSite,
+        utm_source: entry.utm_source,
+        normUtm: entry.normUtm,
+        requests: 0,
+        coverageWeighted: 0,
+        ecpmWeighted: 0,
+        currentWeighted: 0
+      };
+    }
+    var utmItem = utmAgg[keyUtm];
+    utmItem.requests += req;
+    if (req > 0) {
+      utmItem.coverageWeighted += (entry.coverage || 0) * req;
+      utmItem.ecpmWeighted += (entry.ecpm || 0) * req;
+      utmItem.currentWeighted += (entry.currentRule || 0) * req;
+    }
+  });
+
+  var siteRows = Object.keys(siteAgg).map(function(key){
+    var item = siteAgg[key];
+    var requests = item.requests || 0;
+    var coverage = requests > 0 ? (item.coverageWeighted / requests) : 0;
+    var ecpm = requests > 0 ? (item.ecpmWeighted / requests) : 0;
+    var coefficient = findCoefficientForCoverage_(coverage, context.ranges);
+    var computedRule = ecpm * coefficient;
+    var bucketInfo = chooseBucketValue_(computedRule, context.bucketMap[key]);
+    var currentRule = requests > 0 ? (item.currentWeighted / requests) : 0;
+    var eligible = requests >= AUTO_PRICING_MIN_REQUESTS && bucketInfo.value != null;
+    var shouldUpdate = eligible && !nearlyEqual_(currentRule, bucketInfo.value);
+    return {
+      site: item.site,
+      requests: requests,
+      coverage: coverage,
+      ecpm: ecpm,
+      coefficient: coefficient,
+      computedRule: computedRule,
+      bucketRule: bucketInfo.value,
+      bucketLabel: bucketInfo.label,
+      currentRule: currentRule,
+      shouldUpdate: shouldUpdate,
+      utm_sources: Object.keys(item.utmSet).map(function(k){ return item.utmSet[k]; }).sort(function(a,b){ return String(a || '').localeCompare(String(b || ''), 'pt-BR'); })
+    };
+  }).sort(function(a,b){
+    return String(a.site || '').localeCompare(String(b.site || ''), 'pt-BR');
+  });
+
+  var utmRows = Object.keys(utmAgg).map(function(key){
+    var item = utmAgg[key];
+    var requests = item.requests || 0;
+    var coverage = requests > 0 ? (item.coverageWeighted / requests) : 0;
+    var ecpm = requests > 0 ? (item.ecpmWeighted / requests) : 0;
+    var coefficient = findCoefficientForCoverage_(coverage, context.ranges);
+    var computedRule = ecpm * coefficient;
+    var bucketInfo = chooseBucketValue_(computedRule, context.bucketMap[item.normSite]);
+    var currentRule = requests > 0 ? (item.currentWeighted / requests) : 0;
+    var eligible = requests >= AUTO_PRICING_MIN_REQUESTS && bucketInfo.value != null;
+    var shouldUpdate = eligible && !nearlyEqual_(currentRule, bucketInfo.value);
+    return {
+      site: item.site,
+      utm_source: item.utm_source,
+      requests: requests,
+      coverage: coverage,
+      ecpm: ecpm,
+      coefficient: coefficient,
+      computedRule: computedRule,
+      bucketRule: bucketInfo.value,
+      bucketLabel: bucketInfo.label,
+      currentRule: currentRule,
+      shouldUpdate: shouldUpdate
+    };
+  }).sort(function(a,b){
+    var siteCmp = String(a.site || '').localeCompare(String(b.site || ''), 'pt-BR');
+    if (siteCmp !== 0) return siteCmp;
+    return String(a.utm_source || '').localeCompare(String(b.utm_source || ''), 'pt-BR');
+  });
+
+  var eligibleUpdates = entries.filter(function(e){ return e.shouldUpdate; }).length;
+
+  return {
+    context: context,
+    ruleContext: ruleContext,
+    analysis: {
+      generatedAt: Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm:ss'),
+      entries: entries,
+      siteRows: siteRows,
+      utmRows: utmRows,
+      windowHours: windowHours.map(formatHourLabelAuto_),
+      excludedHour: excludedHour != null ? formatHourLabelAuto_(excludedHour) : null,
+      summary: {
+        totalEntries: entries.length,
+        eligibleUpdates: eligibleUpdates
+      },
+      filters: {
+        sites: siteFilterSet ? Object.keys(siteFilterSet) : [],
+        utm_sources: utmFilterSet ? Object.keys(utmFilterSet) : []
+      }
+    }
+  };
+}
+
+function getAutoPricingState(params) {
+  var plan = computeAutoPricingPlan_(params);
+  return {
+    config: plan.context.config,
+    ranges: plan.context.ranges,
+    siteOptions: plan.context.siteOptions,
+    utmOptions: plan.context.utmOptions,
+    bucketMap: plan.context.bucketMap,
+    intervalHours: AUTO_PRICING_INTERVAL_HOURS,
+    windowHours: AUTO_PRICING_WINDOW_HOURS,
+    minRequests: AUTO_PRICING_MIN_REQUESTS,
+    analysis: plan.analysis
+  };
+}
+
+function saveAutoPricingConfig(payload) {
+  var data = payload || {};
+  var ranges = Array.isArray(data.ranges) ? data.ranges : [];
+  var sites = Array.isArray(data.sites) ? data.sites : [];
+  var buckets = Array.isArray(data.buckets) ? data.buckets : [];
+
+  var sh = ensureAutoPricingConfigSheet_();
+  sh.clearContents();
+
+  var rows = [];
+  function push(arr) {
+    var row = (arr || []).slice();
+    while (row.length < 3) row.push('');
+    rows.push(row);
+  }
+
+  push(AUTO_PRICING_RANGE_HEADER);
+  ranges.forEach(function(item){
+    if (!item) return;
+    push([item.upper, item.lower, item.coefficient]);
+  });
+  push([]);
+  push(AUTO_PRICING_SITE_HEADER);
+  sites.forEach(function(item){
+    if (!item || !item.site) return;
+    var utmList = Array.isArray(item.utmSources) ? item.utmSources : [];
+    push([item.site, utmList.join(';'), parseAutoPricingBoolean_(item.active)]);
+  });
+  push([]);
+  push(AUTO_PRICING_BUCKET_HEADER);
+  buckets.forEach(function(item){
+    if (!item || !item.site) return;
+    var bucketList = Array.isArray(item.buckets) ? item.buckets : [];
+    var formatted = '[' + bucketList.map(function(v){ return '"' + String(v || '').trim() + '"'; }).join(',') + ']';
+    push([item.site, formatted]);
+  });
+
+  if (rows.length) {
+    sh.getRange(1,1,rows.length,rows[0].length).setValues(rows);
+  }
+
+  return getAutoPricingState();
+}
+
+function runAutoPricing(params) {
+  params = params || {};
+  params.trigger = params.trigger || 'manual';
+  var plan = computeAutoPricingPlan_(params);
+  var updates = plan.analysis.entries.filter(function(entry){ return entry.shouldUpdate; });
+  if (!updates.length) {
+    return {
+      ok: true,
+      updated: 0,
+      message: 'Nenhuma atualização necessária.',
+      result: plan.analysis,
+      config: plan.context.config,
+      intervalHours: AUTO_PRICING_INTERVAL_HOURS
+    };
+  }
+
+  var sheet = plan.ruleContext.sheet;
+  var idx = plan.ruleContext.idx || {};
+  var priceCol = idx['price_rule'];
+  if (priceCol == null) {
+    throw new Error("A coluna 'price_rule' não foi encontrada na aba de precificação da Igoal.");
+  }
+  var syncCol = plan.ruleContext.syncCol;
+  var tz = Session.getScriptTimeZone();
+  var timestamp = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd HH:mm:ss');
+  var logSheet = ensureAutoPricingLogSheet_();
+  var logRows = [];
+
+  updates.forEach(function(entry){
+    var ruleInfo = plan.ruleContext.map[entry.key];
+    if (!ruleInfo || !ruleInfo.rowIndex) {
+      logRows.push([timestamp, params.trigger, entry.site, entry.utm_source, entry.url, entry.currentRule, entry.bucketRule, entry.coverage, entry.ecpm, entry.coefficient, entry.bucketLabel, entry.requests, 'Regra não encontrada na aba de precificação']);
+      entry.reason = 'Regra não encontrada na aba de precificação';
+      return;
+    }
+    var newValue = entry.bucketRule;
+    var formatted = formatPriceRuleIgoal_(newValue);
+    sheet.getRange(ruleInfo.rowIndex, priceCol + 1).setValue(formatted);
+    if (syncCol != null && syncCol >= 0) {
+      sheet.getRange(ruleInfo.rowIndex, syncCol + 1).setValue('Sim');
+    }
+    logRows.push([timestamp, params.trigger, entry.site, entry.utm_source, entry.url, ruleInfo.price_rule, newValue, entry.coverage, entry.ecpm, entry.coefficient, entry.bucketLabel, entry.requests, 'Atualizado via automação']);
+  });
+
+  if (logRows.length) {
+    var range = logSheet.getRange(logSheet.getLastRow() + 1, 1, logRows.length, AUTO_PRICING_LOG_HEADERS.length);
+    var payload = logRows.map(function(row){
+      var r = row.slice();
+      while (r.length < AUTO_PRICING_LOG_HEADERS.length) r.push('');
+      return r;
+    });
+    range.setValues(payload);
+  }
+
+  // recarrega análise após atualização
+  var refreshed = computeAutoPricingPlan_(params);
+  return {
+    ok: true,
+    updated: logRows.length,
+    message: 'Precificação aplicada para ' + logRows.length + ' itens.',
+    result: refreshed.analysis,
+    config: refreshed.context.config,
+    intervalHours: AUTO_PRICING_INTERVAL_HOURS
+  };
+}
 /* ============= DASHBOARD ============= */
 function getDashboardData(params) {
   params = params || {};
