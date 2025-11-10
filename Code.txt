@@ -28,9 +28,9 @@ const AUTO_PRICING_INTERVAL_HOURS = 3; // intervalo padrão entre execuções au
 const AUTO_PRICING_WINDOW_HOURS = 3; // quantidade de horas utilizadas na análise
 const AUTO_PRICING_MIN_REQUESTS = 10; // solicitações mínimas para atualizar uma regra
 const AUTO_PRICING_RANGE_HEADER = ['Cobertura Superior','Cobertura Inferior','Coeficiente'];
-const AUTO_PRICING_SITE_HEADER = ['Site','utm_source (separe por ;)','Ativo?'];
+const AUTO_PRICING_SITE_HEADER = ['Site','utm_source (separe por ;)','Rede','Ativo?'];
 const AUTO_PRICING_BUCKET_HEADER = ['Site','Buckets disponíveis (JSON ou separados por ;)'];
-const AUTO_PRICING_LOG_HEADERS = ['Timestamp','Disparo','Site','UTM Source','URL','Regra Atual','Nova Regra','Cobertura (%)','eCPM','Coeficiente','Bucket Aplicado','Solicitações','Observações'];
+const AUTO_PRICING_LOG_HEADERS = ['Timestamp','Disparo','Site','Rede','UTM Source','URL','Regra Atual','Nova Regra','Cobertura (%)','eCPM','Coeficiente','Bucket Aplicado','Solicitações','Observações'];
 
 function doGet() {
   return HtmlService.createTemplateFromFile('index')
@@ -112,9 +112,14 @@ function ensureAutoPricingConfigSheet_() {
   if (!sh) {
     sh = ss.insertSheet(AUTO_PRICING_CONFIG_SHEET);
     var defaultRows = [];
+    var minCols = Math.max(
+      AUTO_PRICING_RANGE_HEADER.length,
+      AUTO_PRICING_SITE_HEADER.length,
+      AUTO_PRICING_BUCKET_HEADER.length
+    );
     function pushRow(arr) {
       var row = (arr || []).slice();
-      while (row.length < 3) row.push('');
+      while (row.length < minCols) row.push('');
       defaultRows.push(row);
     }
 
@@ -122,7 +127,7 @@ function ensureAutoPricingConfigSheet_() {
     [[100,95,1.30],[95,90,1.20],[90,85,1.15],[85,78,1.10],[78,72,1.00],[72,65,0.90],[65,60,0.85],[60,55,0.80],[55,50,0.75],[50,45,0.70],[45,40,0.65],[40,35,0.60],[35,30,0.55],[30,0,0.50]].forEach(function(row){ pushRow(row); });
     pushRow([]);
     pushRow(AUTO_PRICING_SITE_HEADER);
-    pushRow(['exemplo.com','utm_a;utm_b','TRUE']);
+    pushRow(['exemplo.com','utm_a;utm_b','Igoal','TRUE']);
     pushRow([]);
     pushRow(AUTO_PRICING_BUCKET_HEADER);
     pushRow(['exemplo.com','["0.13","0.14","0.15","0.16"]']);
@@ -187,6 +192,9 @@ function normSite_(val) {
   return String(val == null ? '' : val).trim().toLowerCase();
 }
 function normUtm_(val) {
+  return String(val == null ? '' : val).trim().toLowerCase();
+}
+function normNetwork_(val) {
   return String(val == null ? '' : val).trim().toLowerCase();
 }
 function parseDate_(v) {
@@ -479,8 +487,20 @@ function loadAutoPricingConfig_() {
       var site = String(row[0] || '').trim();
       if (!site) return;
       var utmParts = parseBucketsValue_(row[1]);
-      var active = parseAutoPricingBoolean_(row[2]);
-      config.sites.push({ site: site, utmSources: utmParts, active: active });
+      var network = '';
+      var activeCellValue;
+      if (row.length >= 4) {
+        network = String(row[2] || '').trim();
+        activeCellValue = row[3];
+        if ((activeCellValue == null || String(activeCellValue).trim() === '') && row[2] !== undefined && row[3] === undefined) {
+          activeCellValue = row[2];
+          network = '';
+        }
+      } else {
+        activeCellValue = row[2];
+      }
+      var active = parseAutoPricingBoolean_(activeCellValue);
+      config.sites.push({ site: site, utmSources: utmParts, network: network, active: active });
     } else if (section === 'buckets') {
       var bucketSite = String(row[0] || '').trim();
       if (!bucketSite) return;
@@ -506,15 +526,21 @@ function buildAutoPricingContext_() {
     if (!normSite) return;
     var utmList = Array.isArray(entry.utmSources) ? entry.utmSources : [];
     var active = parseAutoPricingBoolean_(entry.active);
+    var network = String(entry.network || '').trim();
+    var normNetwork = normNetwork_(network);
     utmList.forEach(function(utm){
       var normUtm = normUtm_(utm);
       if (!normUtm) return;
       var key = normSite + '||' + normUtm;
       if (!combosMap[key]) {
-        combosMap[key] = { site: siteName, normSite: normSite, utm_source: utm, normUtm: normUtm, active: active };
+        combosMap[key] = { site: siteName, normSite: normSite, utm_source: utm, normUtm: normUtm, active: active, network: network, normNetwork: normNetwork };
       } else {
         combosMap[key].active = combosMap[key].active || active;
         if (!combosMap[key].utm_source && utm) combosMap[key].utm_source = utm;
+        if (!combosMap[key].network && network) {
+          combosMap[key].network = network;
+          combosMap[key].normNetwork = normNetwork;
+        }
       }
     });
   });
@@ -626,6 +652,11 @@ function createNormalizedSet_(arr, normalizer) {
     if (norm) set[norm] = true;
   });
   return Object.keys(set).length ? set : null;
+}
+
+function isAutoPricingNetworkSupported_(network) {
+  var norm = normNetwork_(network);
+  return norm === 'igoal';
 }
 
 function findCoefficientForCoverage_(coverage, ranges) {
@@ -760,7 +791,8 @@ function computeAutoPricingPlan_(params) {
     var normSite = normSite_(siteVal);
     var normUtm = normUtm_(utmVal);
     var comboKey = normSite + '||' + normUtm;
-    if (!allowedComboMap[comboKey]) return;
+    var comboInfo = allowedComboMap[comboKey];
+    if (!comboInfo) return;
     var dateObj = parseDate_(dateVal);
     if (!dateObj) return;
     var hourNumber = parseInt(hourVal, 10);
@@ -775,6 +807,8 @@ function computeAutoPricingPlan_(params) {
       normUtm: normUtm,
       url: String(urlVal || ''),
       normUrl: normUrlStrict_(urlVal),
+      network: comboInfo && comboInfo.network ? String(comboInfo.network) : '',
+      normNetwork: comboInfo && comboInfo.normNetwork ? comboInfo.normNetwork : normNetwork_(comboInfo && comboInfo.network),
       requests: toNumber_(row[idx[HEADER_MAP.requests]]),
       coverage: toNumber_(row[idx[HEADER_MAP.coverage]]),
       ecpm: toNumber_(row[idx[HEADER_MAP.ecpm]]),
@@ -821,6 +855,8 @@ function computeAutoPricingPlan_(params) {
         normSite: row.normSite,
         utm_source: row.utm_source,
         normUtm: row.normUtm,
+        network: row.network,
+        normNetwork: row.normNetwork,
         url: row.url,
         normUrl: row.normUrl,
         requests: 0,
@@ -853,10 +889,13 @@ function computeAutoPricingPlan_(params) {
     var bucketInfo = chooseBucketValue_(computedRule, context.bucketMap[agg.normSite]);
     var ruleInfo = ruleContext.map[key];
     var currentRule = ruleInfo ? ruleInfo.price_rule : 0;
-    var eligible = requests >= AUTO_PRICING_MIN_REQUESTS && bucketInfo.value != null;
+    var network = agg.network || '';
+    var supportedNetwork = isAutoPricingNetworkSupported_(network);
+    var eligible = supportedNetwork && requests >= AUTO_PRICING_MIN_REQUESTS && bucketInfo.value != null;
     var shouldUpdate = eligible && !nearlyEqual_(currentRule, bucketInfo.value);
     var reason = '';
-    if (!requests) reason = 'Sem dados nas últimas horas';
+    if (!supportedNetwork) reason = 'Rede não suportada pela automação';
+    else if (!requests) reason = 'Sem dados nas últimas horas';
     else if (requests < AUTO_PRICING_MIN_REQUESTS) reason = 'Solicitações insuficientes';
     else if (bucketInfo.value == null) reason = 'Sem bucket disponível';
     else if (!shouldUpdate) reason = 'Regra atualizada';
@@ -866,6 +905,8 @@ function computeAutoPricingPlan_(params) {
       normSite: agg.normSite,
       utm_source: agg.utm_source,
       normUtm: agg.normUtm,
+      network: network,
+      normNetwork: agg.normNetwork,
       url: agg.url,
       normUrl: agg.normUrl,
       requests: requests,
@@ -892,14 +933,19 @@ function computeAutoPricingPlan_(params) {
     var normSite = parts[0];
     var normUtm = parts[1];
     var comboKey = normSite + '||' + normUtm;
-    if (!allowedComboMap[comboKey]) return;
+    var comboInfo = allowedComboMap[comboKey];
+    if (!comboInfo) return;
     var info = ruleContext.map[key];
+    var network = comboInfo.network || '';
+    var supportedNetwork = isAutoPricingNetworkSupported_(network);
     entries.push({
       key: key,
       site: info.dominio,
       normSite: normSite,
       utm_source: info.utm_source,
       normUtm: normUtm,
+      network: network,
+      normNetwork: comboInfo.normNetwork,
       url: info.url,
       normUrl: normUrlStrict_(info.url),
       requests: 0,
@@ -912,7 +958,7 @@ function computeAutoPricingPlan_(params) {
       currentRule: info.price_rule,
       eligible: false,
       shouldUpdate: false,
-      reason: 'Sem dados nas últimas horas',
+      reason: supportedNetwork ? 'Sem dados nas últimas horas' : 'Rede não suportada pela automação',
       hoursUsed: [],
       windowHours: windowHours.map(formatHourLabelAuto_)
     });
@@ -929,6 +975,7 @@ function computeAutoPricingPlan_(params) {
   var siteAgg = {};
   var utmAgg = {};
   entries.forEach(function(entry){
+    if (!isAutoPricingNetworkSupported_(entry.network)) return;
     var keySite = entry.normSite;
     if (!siteAgg[keySite]) {
       siteAgg[keySite] = {
@@ -958,6 +1005,7 @@ function computeAutoPricingPlan_(params) {
         normSite: entry.normSite,
         utm_source: entry.utm_source,
         normUtm: entry.normUtm,
+        network: entry.network,
         requests: 0,
         coverageWeighted: 0,
         ecpmWeighted: 0,
@@ -1015,6 +1063,7 @@ function computeAutoPricingPlan_(params) {
     return {
       site: item.site,
       utm_source: item.utm_source,
+      network: item.network,
       requests: requests,
       coverage: coverage,
       ecpm: ecpm,
@@ -1080,9 +1129,14 @@ function saveAutoPricingConfig(payload) {
   sh.clearContents();
 
   var rows = [];
+  var minCols = Math.max(
+    AUTO_PRICING_RANGE_HEADER.length,
+    AUTO_PRICING_SITE_HEADER.length,
+    AUTO_PRICING_BUCKET_HEADER.length
+  );
   function push(arr) {
     var row = (arr || []).slice();
-    while (row.length < 3) row.push('');
+    while (row.length < minCols) row.push('');
     rows.push(row);
   }
 
@@ -1096,7 +1150,8 @@ function saveAutoPricingConfig(payload) {
   sites.forEach(function(item){
     if (!item || !item.site) return;
     var utmList = Array.isArray(item.utmSources) ? item.utmSources : [];
-    push([item.site, utmList.join(';'), parseAutoPricingBoolean_(item.active)]);
+    var network = String(item.network || '').trim();
+    push([item.site, utmList.join(';'), network, parseAutoPricingBoolean_(item.active)]);
   });
   push([]);
   push(AUTO_PRICING_BUCKET_HEADER);
@@ -1145,7 +1200,7 @@ function runAutoPricing(params) {
   updates.forEach(function(entry){
     var ruleInfo = plan.ruleContext.map[entry.key];
     if (!ruleInfo || !ruleInfo.rowIndex) {
-      logRows.push([timestamp, params.trigger, entry.site, entry.utm_source, entry.url, entry.currentRule, entry.bucketRule, entry.coverage, entry.ecpm, entry.coefficient, entry.bucketLabel, entry.requests, 'Regra não encontrada na aba de precificação']);
+      logRows.push([timestamp, params.trigger, entry.site, entry.network, entry.utm_source, entry.url, entry.currentRule, entry.bucketRule, entry.coverage, entry.ecpm, entry.coefficient, entry.bucketLabel, entry.requests, 'Regra não encontrada na aba de precificação']);
       entry.reason = 'Regra não encontrada na aba de precificação';
       return;
     }
@@ -1155,7 +1210,7 @@ function runAutoPricing(params) {
     if (syncCol != null && syncCol >= 0) {
       sheet.getRange(ruleInfo.rowIndex, syncCol + 1).setValue('Sim');
     }
-    logRows.push([timestamp, params.trigger, entry.site, entry.utm_source, entry.url, ruleInfo.price_rule, newValue, entry.coverage, entry.ecpm, entry.coefficient, entry.bucketLabel, entry.requests, 'Atualizado via automação']);
+    logRows.push([timestamp, params.trigger, entry.site, entry.network, entry.utm_source, entry.url, ruleInfo.price_rule, newValue, entry.coverage, entry.ecpm, entry.coefficient, entry.bucketLabel, entry.requests, 'Atualizado via automação']);
   });
 
   if (logRows.length) {
