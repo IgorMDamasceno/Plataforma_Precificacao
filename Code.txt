@@ -2,7 +2,8 @@
 
 const PRICING_SHEET_ADSELETO = 'Precificação - AdSeleto';
 const PRICING_SHEET_IGOAL = 'Precificação - Igoal';
-const BASE_SHEET_CANDIDATES = ['Base de Dados','Base de Dados - Exemplo','BD - GAM','BD - GAM1'];
+const BASE_SHEET_CANDIDATES = ['Base de Dados','Base de Dados - Exemplo','BD - GAM','BD – GAM','BD - GAM1'];
+const AUTO_PRICING_DATA_SHEETS = ['BD - GAM','BD – GAM'];
 const HEADER_ALIASES = {
   date: ['Data'],
   hour: ['Hora'],
@@ -16,7 +17,7 @@ const HEADER_ALIASES = {
   revenue: ['Receita (USD)', 'Receita', 'Receita Total', 'Revenue'],
   ecpm: ['eCPM', 'ECPM'],
   requests: ['Solicitação AD', 'Solicitações', 'Solicitacoes', 'Requests'],
-  coverage: ['Cobertura', 'Coverage'],
+  coverage: ['Cobertura', 'Cobertura (%)', 'Cobertura %', 'Coverage'],
   cpc: ['CPC'],
   viewability: ['Viewability']
 };
@@ -45,6 +46,15 @@ function getBaseSheet_() {
     if (sh) return sh;
   }
   return ss.getSheets()[0];
+}
+
+function getAutoPricingDataSheet_() {
+  const ss = SpreadsheetApp.getActive();
+  for (var i = 0; i < AUTO_PRICING_DATA_SHEETS.length; i++) {
+    var sh = ss.getSheetByName(AUTO_PRICING_DATA_SHEETS[i]);
+    if (sh) return sh;
+  }
+  return getBaseSheet_();
 }
 
 function ensurePricingSheetAdSeleto_() {
@@ -631,7 +641,7 @@ function computeAutoPricingPlan_(params) {
 
   var ruleContexts = buildRuleContextsForCombos_(allowedComboMap);
 
-  var baseSheet = SpreadsheetApp.getActive().getSheetByName('BD - GAM') || getBaseSheet_();
+  var baseSheet = getAutoPricingDataSheet_();
   var data = baseSheet.getDataRange().getValues();
   if (!data.length) {
     return {
