@@ -224,6 +224,7 @@
       minRequests: null,
       analysis: { entries: [], siteRows: [], utmRows: [], summary: { totalEntries: 0, eligibleUpdates: 0 }, windowHours: [], excludedHour: null, filters: { sites: [], utm_sources: [] } },
       filters: { sites: [], utms: [] },
+      filterTimer: null,
       analysisTab: 'site',
       primaryView: 'consulta'
     };
@@ -405,6 +406,32 @@
       });
     }
 
+    function sanitizeAutoPricingFilters(){
+      AutoPricing.filters = AutoPricing.filters || { sites: [], utms: [] };
+      var siteMap = {};
+      (AutoPricing.siteOptions || []).forEach(function(opt){
+        if (!opt || !opt.site) return;
+        siteMap[String(opt.site).trim().toLowerCase()] = opt.site;
+      });
+      var utmMap = {};
+      (AutoPricing.utmOptions || []).forEach(function(opt){
+        if (!opt || !opt.utm_source) return;
+        utmMap[String(opt.utm_source).trim().toLowerCase()] = opt.utm_source;
+      });
+      AutoPricing.filters.sites = (AutoPricing.filters.sites || []).map(function(value){
+        var key = String(value || '').trim().toLowerCase();
+        return siteMap[key] || null;
+      }).filter(function(value, index, arr){
+        return value != null && arr.indexOf(value) === index;
+      });
+      AutoPricing.filters.utms = (AutoPricing.filters.utms || []).map(function(value){
+        var key = String(value || '').trim().toLowerCase();
+        return utmMap[key] || null;
+      }).filter(function(value, index, arr){
+        return value != null && arr.indexOf(value) === index;
+      });
+    }
+
     function renderAutoPricingFilters(){
       var siteSelect = byId('auto-filter-sites');
       if (siteSelect) {
@@ -428,6 +455,19 @@
         var selectedUtms = (AutoPricing.filters && AutoPricing.filters.utms) ? AutoPricing.filters.utms : [];
         Array.from(utmSelect.options).forEach(function(option){ option.selected = selectedUtms.indexOf(option.value) !== -1; });
       }
+    }
+
+    function scheduleAutoPricingRefresh(){
+      if (AutoPricing.filterTimer) {
+        clearTimeout(AutoPricing.filterTimer);
+      }
+      AutoPricing.filterTimer = setTimeout(function(){
+        var payload = {
+          sites: (AutoPricing.filters && AutoPricing.filters.sites) ? AutoPricing.filters.sites.slice() : [],
+          utm_sources: (AutoPricing.filters && AutoPricing.filters.utms) ? AutoPricing.filters.utms.slice() : []
+        };
+        loadAutoPricingState(payload, false);
+      }, 250);
     }
 
     function describeAutoPricingStatus(entry){
@@ -585,12 +625,46 @@
       };
       AutoPricing.siteOptions = Array.isArray(data.siteOptions) ? data.siteOptions.slice() : [];
       AutoPricing.utmOptions = Array.isArray(data.utmOptions) ? data.utmOptions.slice() : [];
+
+      if ((!AutoPricing.siteOptions || !AutoPricing.siteOptions.length) && AutoPricing.config && Array.isArray(AutoPricing.config.sites)) {
+        var siteFallback = {};
+        AutoPricing.config.sites.forEach(function(item){
+          if (!item || item.active === false) return;
+          var label = String(item.site || '').trim();
+          if (!label) return;
+          var norm = label.toLowerCase();
+          if (siteFallback[norm]) return;
+          siteFallback[norm] = { site: label, normSite: norm };
+        });
+        AutoPricing.siteOptions = Object.keys(siteFallback).map(function(key){ return siteFallback[key]; }).sort(function(a,b){
+          return String(a.site || '').localeCompare(String(b.site || ''), 'pt-BR');
+        });
+      }
+
+      if ((!AutoPricing.utmOptions || !AutoPricing.utmOptions.length) && AutoPricing.config && Array.isArray(AutoPricing.config.sites)) {
+        var utmFallback = {};
+        AutoPricing.config.sites.forEach(function(item){
+          if (!item || item.active === false) return;
+          var utms = Array.isArray(item.utmSources) ? item.utmSources : [];
+          utms.forEach(function(utm){
+            var label = String(utm || '').trim();
+            if (!label) return;
+            var norm = label.toLowerCase();
+            if (utmFallback[norm]) return;
+            utmFallback[norm] = { utm_source: label, normUtm: norm };
+          });
+        });
+        AutoPricing.utmOptions = Object.keys(utmFallback).map(function(key){ return utmFallback[key]; }).sort(function(a,b){
+          return String(a.utm_source || '').localeCompare(String(b.utm_source || ''), 'pt-BR');
+        });
+      }
       AutoPricing.bucketMap = data.bucketMap || {};
       AutoPricing.intervalHours = data.intervalHours;
       AutoPricing.windowHours = data.windowHours;
       AutoPricing.minRequests = data.minRequests;
       AutoPricing.analysis = data.analysis || { entries: [], siteRows: [], utmRows: [], summary: { totalEntries: 0, eligibleUpdates: 0 }, windowHours: [], excludedHour: null, filters: { sites: [], utm_sources: [] } };
       AutoPricing.filters = { sites: AutoPricing.analysis.filters ? (AutoPricing.analysis.filters.sites || []) : [], utms: AutoPricing.analysis.filters ? (AutoPricing.analysis.filters.utm_sources || []) : [] };
+      sanitizeAutoPricingFilters();
       renderAutoConfig();
       renderAutoPricingFilters();
       renderAutoPricingAnalysis();
@@ -603,6 +677,9 @@
       if (filterOverride && Array.isArray(filterOverride.utm_sources)) filters.utm_sources = filterOverride.utm_sources.slice();
       else if (AutoPricing.filters && Array.isArray(AutoPricing.filters.utms)) filters.utm_sources = AutoPricing.filters.utms.slice();
       AutoPricing.filters = { sites: filters.sites.slice(), utms: filters.utm_sources.slice() };
+      sanitizeAutoPricingFilters();
+      filters.sites = (AutoPricing.filters && Array.isArray(AutoPricing.filters.sites)) ? AutoPricing.filters.sites.slice() : [];
+      filters.utm_sources = (AutoPricing.filters && Array.isArray(AutoPricing.filters.utms)) ? AutoPricing.filters.utms.slice() : [];
       if (showLoadingOverlay) showLoading('Carregando precificação automática...');
       google.script.run
         .withSuccessHandler(function(res){ hideLoading(); applyAutoPricingState(res); AutoPricing.loaded = true; })
@@ -718,9 +795,17 @@
       var runBtn = byId('auto-btn-run');
       if (runBtn) runBtn.addEventListener('click', runAutoPricingHandler);
       var siteSelect = byId('auto-filter-sites');
-      if (siteSelect) siteSelect.addEventListener('change', function(){ AutoPricing.filters.sites = getMultiSelectValues(siteSelect); });
+      if (siteSelect) siteSelect.addEventListener('change', function(){
+        AutoPricing.filters.sites = getMultiSelectValues(siteSelect);
+        sanitizeAutoPricingFilters();
+        scheduleAutoPricingRefresh();
+      });
       var utmSelect = byId('auto-filter-utms');
-      if (utmSelect) utmSelect.addEventListener('change', function(){ AutoPricing.filters.utms = getMultiSelectValues(utmSelect); });
+      if (utmSelect) utmSelect.addEventListener('change', function(){
+        AutoPricing.filters.utms = getMultiSelectValues(utmSelect);
+        sanitizeAutoPricingFilters();
+        scheduleAutoPricingRefresh();
+      });
       var tabSite = byId('auto-tab-site');
       if (tabSite) tabSite.addEventListener('click', function(){ setAutoAnalysisTab('site'); });
       var tabUtm = byId('auto-tab-utm');

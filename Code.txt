@@ -444,11 +444,46 @@ function buildAutoPricingContext_() {
     return String(a.site || '').localeCompare(String(b.site || ''), 'pt-BR');
   });
 
+  if (!siteOptions.length) {
+    var seenSiteFallback = {};
+    (config.sites || []).forEach(function(entry){
+      if (!entry || entry.active === false) return;
+      var siteName = String(entry.site || '').trim();
+      if (!siteName) return;
+      var normSite = normSite_(siteName);
+      if (!normSite || seenSiteFallback[normSite]) return;
+      seenSiteFallback[normSite] = true;
+      siteOptions.push({ site: siteName, normSite: normSite });
+    });
+    siteOptions.sort(function(a,b){
+      return String(a.site || '').localeCompare(String(b.site || ''), 'pt-BR');
+    });
+  }
+
   var utmOptions = Object.keys(utmOptionsMap).map(function(key){
     return { utm_source: utmOptionsMap[key], normUtm: key };
   }).sort(function(a,b){
     return String(a.utm_source || '').localeCompare(String(b.utm_source || ''), 'pt-BR');
   });
+
+  if (!utmOptions.length) {
+    var seenUtmFallback = {};
+    (config.sites || []).forEach(function(entry){
+      if (!entry || entry.active === false) return;
+      var utms = Array.isArray(entry.utmSources) ? entry.utmSources : [];
+      utms.forEach(function(utm){
+        var label = String(utm || '').trim();
+        if (!label) return;
+        var norm = normUtm_(label);
+        if (!norm || seenUtmFallback[norm]) return;
+        seenUtmFallback[norm] = true;
+        utmOptions.push({ utm_source: label, normUtm: norm });
+      });
+    });
+    utmOptions.sort(function(a,b){
+      return String(a.utm_source || '').localeCompare(String(b.utm_source || ''), 'pt-BR');
+    });
+  }
 
   var bucketMap = {};
   (config.buckets || []).forEach(function(entry){
