@@ -176,31 +176,31 @@
               <button id="auto-btn-save" type="button" class="bg-sky-500 hover:bg-sky-400 text-slate-900 font-semibold px-4 py-2 rounded-xl text-sm shadow-lg shadow-sky-900/30 transition-all">Salvar configurações</button>
             </div>
           </div>
-          <div class="grid gap-6 lg:grid-cols-3">
-            <div class="space-y-3">
-              <div class="flex items-center justify-between">
+          <div class="space-y-6">
+            <section class="space-y-3 p-4 pill rounded-xl">
+              <div class="flex flex-wrap items-center justify-between gap-3">
                 <h4 class="text-sm font-semibold text-slate-200">Faixas de cobertura</h4>
                 <button id="auto-add-range" type="button" class="pill px-3 py-1 rounded-lg text-xs">Adicionar faixa</button>
               </div>
               <p class="text-xs text-slate-400">Os coeficientes podem ser ajustados para controlar a agressividade da precificação.</p>
               <div id="auto-config-ranges" class="overflow-auto"></div>
-            </div>
-            <div class="space-y-3">
-              <div class="flex items-center justify-between">
+            </section>
+            <section class="space-y-3 p-4 pill rounded-xl">
+              <div class="flex flex-wrap items-center justify-between gap-3">
                 <h4 class="text-sm font-semibold text-slate-200">Sites, utm_source e rede</h4>
                 <button id="auto-add-site" type="button" class="pill px-3 py-1 rounded-lg text-xs">Adicionar linha</button>
               </div>
-              <p class="text-xs text-slate-400">Somente as combinações cadastradas serão atualizadas automaticamente.</p>
+              <p class="text-xs text-slate-400">Somente as combinações cadastradas serão atualizadas automaticamente. Informe também o Company ID (Igoal) ou o PMD ID (AdSeleto) quando aplicável.</p>
               <div id="auto-config-sites" class="overflow-auto"></div>
-            </div>
-            <div class="space-y-3">
-              <div class="flex items-center justify-between">
+            </section>
+            <section class="space-y-3 p-4 pill rounded-xl">
+              <div class="flex flex-wrap items-center justify-between gap-3">
                 <h4 class="text-sm font-semibold text-slate-200">Buckets disponíveis</h4>
                 <button id="auto-add-bucket" type="button" class="pill px-3 py-1 rounded-lg text-xs">Adicionar site</button>
               </div>
               <p class="text-xs text-slate-400">Informe os valores permitidos por site. O script sempre escolherá o menor valor disponível abaixo do calculado.</p>
               <div id="auto-config-buckets" class="overflow-auto"></div>
-            </div>
+            </section>
           </div>
         </div>
       </div>
@@ -1003,15 +1003,15 @@ function todayIso(){
         container.innerHTML = '<p class="text-xs text-slate-400">Nenhuma faixa cadastrada. Clique em “Adicionar faixa” para criar uma nova linha.</p>';
         return;
       }
-      var html = ['<div class="overflow-auto"><table class="w-full text-sm pricing-table"><thead class="text-slate-400"><tr><th class="text-left font-semibold py-2 px-2">Cobertura superior (%)</th><th class="text-left font-semibold py-2 px-2">Cobertura inferior (%)</th><th class="text-left font-semibold py-2 px-2">Coeficiente</th><th class="py-2 px-2"></th></tr></thead><tbody>'];
+      var html = ['<div class="overflow-auto"><table class="w-full text-sm pricing-table"><thead class="text-slate-400"><tr><th class="text-center font-semibold py-2 px-2">Cobertura superior (%)</th><th class="text-center font-semibold py-2 px-2">Cobertura inferior (%)</th><th class="text-center font-semibold py-2 px-2">Coeficiente</th><th class="py-2 px-2"></th></tr></thead><tbody>'];
       ranges.forEach(function(item, idx){
         var upperVal = (item && item.upper !== '' && item.upper != null) ? String(item.upper) : '';
         var lowerVal = (item && item.lower !== '' && item.lower != null) ? String(item.lower) : '';
         var coefVal = (item && item.coefficient !== '' && item.coefficient != null) ? String(item.coefficient) : '';
         html.push('<tr data-index="' + idx + '">');
-        html.push('<td class="py-1 px-2"><input type="number" step="0.01" data-field="upper" class="w-full bg-slate-800/60 border border-slate-700/60 rounded-lg px-2 py-1 text-right" value="' + escapeHtml(upperVal) + '"></td>');
-        html.push('<td class="py-1 px-2"><input type="number" step="0.01" data-field="lower" class="w-full bg-slate-800/60 border border-slate-700/60 rounded-lg px-2 py-1 text-right" value="' + escapeHtml(lowerVal) + '"></td>');
-        html.push('<td class="py-1 px-2"><input type="number" step="0.01" data-field="coefficient" class="w-full bg-slate-800/60 border border-slate-700/60 rounded-lg px-2 py-1 text-right" value="' + escapeHtml(coefVal) + '"></td>');
+        html.push('<td class="py-1 px-2 text-center"><input type="number" step="0.01" data-field="upper" class="w-full bg-slate-800/60 border border-slate-700/60 rounded-lg px-2 py-1 text-center" value="' + escapeHtml(upperVal) + '"></td>');
+        html.push('<td class="py-1 px-2 text-center"><input type="number" step="0.01" data-field="lower" class="w-full bg-slate-800/60 border border-slate-700/60 rounded-lg px-2 py-1 text-center" value="' + escapeHtml(lowerVal) + '"></td>');
+        html.push('<td class="py-1 px-2 text-center"><input type="number" step="0.01" data-field="coefficient" class="w-full bg-slate-800/60 border border-slate-700/60 rounded-lg px-2 py-1 text-center" value="' + escapeHtml(coefVal) + '"></td>');
         html.push('<td class="py-1 px-2 text-right"><button type="button" data-remove-range="' + idx + '" class="text-xs text-rose-300 hover:text-rose-200">Remover</button></td>');
         html.push('</tr>');
       });
@@ -1051,17 +1051,26 @@ function todayIso(){
         container.innerHTML = '<p class="text-xs text-slate-400">Cadastre pelo menos um site com as respectivas utm_source e rede para ativar a automação.</p>';
         return;
       }
-      var html = ['<div class="overflow-auto"><table class="w-full text-sm pricing-table"><thead class="text-slate-400"><tr><th class="text-left font-semibold py-2 px-2">Site</th><th class="text-left font-semibold py-2 px-2">utm_source (separe com “;”)</th><th class="text-left font-semibold py-2 px-2">Rede</th><th class="text-left font-semibold py-2 px-2">Ativo?</th><th class="py-2 px-2"></th></tr></thead><tbody>'];
+      function identifierPlaceholder(network) {
+        var net = String(network || '').toLowerCase();
+        if (net === 'igoal') return 'Company ID';
+        if (net === 'adseleto') return 'PMD ID';
+        return 'Identificador (opcional)';
+      }
+      var html = ['<div class="overflow-auto"><table class="w-full text-sm pricing-table"><thead class="text-slate-400"><tr><th class="text-left font-semibold py-2 px-2">Site</th><th class="text-left font-semibold py-2 px-2">utm_source (separe com “;”)</th><th class="text-left font-semibold py-2 px-2">Rede</th><th class="text-left font-semibold py-2 px-2">Company ID / PMD ID</th><th class="text-left font-semibold py-2 px-2">Ativo?</th><th class="py-2 px-2"></th></tr></thead><tbody>'];
       sites.forEach(function(item, idx){
         var siteVal = item && item.site ? item.site : '';
         var utmVal = item && item.utmSources ? item.utmSources.join(';') : '';
         var networkVal = item && item.network ? item.network : '';
         var normalizedNetwork = String(networkVal || '').toLowerCase();
+        var identifierVal = item && item.identifier ? item.identifier : '';
+        var placeholder = identifierPlaceholder(normalizedNetwork);
         var checked = item && item.active === false ? '' : 'checked';
         html.push('<tr data-index="' + idx + '">');
         html.push('<td class="py-1 px-2"><input type="text" data-field="site" class="w-full bg-slate-800/60 border border-slate-700/60 rounded-lg px-2 py-1" value="' + escapeHtml(siteVal) + '"></td>');
         html.push('<td class="py-1 px-2"><input type="text" data-field="utm" class="w-full bg-slate-800/60 border border-slate-700/60 rounded-lg px-2 py-1" value="' + escapeHtml(utmVal) + '"></td>');
         html.push('<td class="py-1 px-2"><select data-field="network" class="w-full bg-slate-800/60 border border-slate-700/60 rounded-lg px-2 py-1"><option value="">Selecione</option><option value="Igoal"' + (normalizedNetwork === 'igoal' ? ' selected' : '') + '>Igoal</option><option value="AdSeleto"' + (normalizedNetwork === 'adseleto' ? ' selected' : '') + '>AdSeleto</option><option value="ActiveView"' + (normalizedNetwork === 'activeview' ? ' selected' : '') + '>ActiveView</option></select></td>');
+        html.push('<td class="py-1 px-2"><input type="text" data-field="identifier" class="w-full bg-slate-800/60 border border-slate-700/60 rounded-lg px-2 py-1" placeholder="' + escapeHtml(placeholder) + '" value="' + escapeHtml(identifierVal) + '"></td>');
         html.push('<td class="py-1 px-2 text-center"><input type="checkbox" data-field="active" class="w-4 h-4" ' + checked + '></td>');
         html.push('<td class="py-1 px-2 text-right"><button type="button" data-remove-site="' + idx + '" class="text-xs text-rose-300 hover:text-rose-200">Remover</button></td>');
         html.push('</tr>');
@@ -1093,7 +1102,21 @@ function todayIso(){
           if (!row) return;
           var index = parseInt(row.getAttribute('data-index'), 10);
           if (isNaN(index)) return;
-          AutoPricing.config.sites[index].network = this.value || '';
+          var value = this.value || '';
+          AutoPricing.config.sites[index].network = value;
+          var inputId = row.querySelector('input[data-field="identifier"]');
+          if (inputId) {
+            inputId.placeholder = identifierPlaceholder(value);
+          }
+        });
+      });
+      Array.from(container.querySelectorAll('input[data-field="identifier"]')).forEach(function(input){
+        input.addEventListener('input', function(){
+          var row = this.closest('tr');
+          if (!row) return;
+          var index = parseInt(row.getAttribute('data-index'), 10);
+          if (isNaN(index)) return;
+          AutoPricing.config.sites[index].identifier = this.value.trim();
         });
       });
       Array.from(container.querySelectorAll('input[data-field="active"]')).forEach(function(input){
@@ -1376,6 +1399,7 @@ function todayIso(){
             site: item && item.site ? String(item.site) : '',
             utmSources: Array.isArray(item && item.utmSources) ? item.utmSources.map(function(v){ return String(v || ''); }).filter(function(v){ return !!v; }) : [],
             network: item && item.network ? String(item.network) : '',
+            identifier: item && item.identifier ? String(item.identifier) : '',
             active: item && item.active === false ? false : true
           };
         }),
@@ -1445,8 +1469,9 @@ function todayIso(){
         var site = String(item.site || '').trim();
         var utms = Array.isArray(item.utmSources) ? item.utmSources.map(function(v){ return String(v || '').trim(); }).filter(function(v){ return !!v; }) : [];
         var network = String(item.network || '').trim();
+        var identifier = String(item.identifier || '').trim();
         if (!site || !utms.length) return null;
-        return { site: site, utmSources: utms, network: network, active: item.active !== false };
+        return { site: site, utmSources: utms, network: network, identifier: identifier, active: item.active !== false };
       }).filter(function(item){ return item != null; });
       var buckets = (AutoPricing.config.buckets || []).map(function(item){
         var site = String(item.site || '').trim();
@@ -1517,7 +1542,7 @@ function todayIso(){
       if (addSiteBtn) {
         addSiteBtn.addEventListener('click', function(){
           AutoPricing.config.sites = AutoPricing.config.sites || [];
-          AutoPricing.config.sites.push({ site: '', utmSources: [], network: 'Igoal', active: true });
+          AutoPricing.config.sites.push({ site: '', utmSources: [], network: 'Igoal', identifier: '', active: true });
           renderAutoConfigSites();
         });
       }

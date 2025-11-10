@@ -28,7 +28,7 @@ const AUTO_PRICING_INTERVAL_HOURS = 3; // intervalo padrão entre execuções au
 const AUTO_PRICING_WINDOW_HOURS = 3; // quantidade de horas utilizadas na análise
 const AUTO_PRICING_MIN_REQUESTS = 10; // solicitações mínimas para atualizar uma regra
 const AUTO_PRICING_RANGE_HEADER = ['Cobertura Superior','Cobertura Inferior','Coeficiente'];
-const AUTO_PRICING_SITE_HEADER = ['Site','utm_source (separe por ;)','Rede','Ativo?'];
+const AUTO_PRICING_SITE_HEADER = ['Site','utm_source (separe por ;)','Rede','Company ID / PMD ID','Ativo?'];
 const AUTO_PRICING_BUCKET_HEADER = ['Site','Buckets disponíveis (JSON ou separados por ;)'];
 const AUTO_PRICING_LOG_HEADERS = ['Timestamp','Disparo','Site','Rede','UTM Source','URL','Regra Atual','Nova Regra','Cobertura (%)','eCPM','Coeficiente','Bucket Aplicado','Solicitações','Observações'];
 
@@ -127,7 +127,7 @@ function ensureAutoPricingConfigSheet_() {
     [[100,95,1.30],[95,90,1.20],[90,85,1.15],[85,78,1.10],[78,72,1.00],[72,65,0.90],[65,60,0.85],[60,55,0.80],[55,50,0.75],[50,45,0.70],[45,40,0.65],[40,35,0.60],[35,30,0.55],[30,0,0.50]].forEach(function(row){ pushRow(row); });
     pushRow([]);
     pushRow(AUTO_PRICING_SITE_HEADER);
-    pushRow(['exemplo.com','utm_a;utm_b','Igoal','TRUE']);
+    pushRow(['exemplo.com','utm_a;utm_b','Igoal','', 'TRUE']);
     pushRow([]);
     pushRow(AUTO_PRICING_BUCKET_HEADER);
     pushRow(['exemplo.com','["0.13","0.14","0.15","0.16"]']);
@@ -444,6 +444,13 @@ function parseAutoPricingBoolean_(value) {
   return true;
 }
 
+function isAutoPricingBooleanToken_(value) {
+  if (value === true || value === false) return true;
+  var s = String(value || '').trim().toLowerCase();
+  if (!s) return false;
+  return ['true','false','0','1','sim','não','nao','yes','no','on','off','ativo','inativo','active','inactive','desligado','ligado'].indexOf(s) !== -1;
+}
+
 function parseBucketsValue_(value) {
   if (value == null) return [];
   if (Array.isArray(value)) {
@@ -488,19 +495,26 @@ function loadAutoPricingConfig_() {
       if (!site) return;
       var utmParts = parseBucketsValue_(row[1]);
       var network = '';
+      var identifier = '';
       var activeCellValue;
-      if (row.length >= 4) {
+      if (row.length >= 5) {
         network = String(row[2] || '').trim();
-        activeCellValue = row[3];
-        if ((activeCellValue == null || String(activeCellValue).trim() === '') && row[2] !== undefined && row[3] === undefined) {
-          activeCellValue = row[2];
-          network = '';
+        identifier = String(row[3] || '').trim();
+        activeCellValue = row[4];
+      } else if (row.length >= 4) {
+        network = String(row[2] || '').trim();
+        if (isAutoPricingBooleanToken_(row[3])) {
+          activeCellValue = row[3];
+        } else {
+          identifier = String(row[3] || '').trim();
         }
+      } else if (row.length >= 3) {
+        network = String(row[2] || '').trim();
       } else {
         activeCellValue = row[2];
       }
       var active = parseAutoPricingBoolean_(activeCellValue);
-      config.sites.push({ site: site, utmSources: utmParts, network: network, active: active });
+      config.sites.push({ site: site, utmSources: utmParts, network: network, identifier: identifier, active: active });
     } else if (section === 'buckets') {
       var bucketSite = String(row[0] || '').trim();
       if (!bucketSite) return;
@@ -528,18 +542,22 @@ function buildAutoPricingContext_() {
     var active = parseAutoPricingBoolean_(entry.active);
     var network = String(entry.network || '').trim();
     var normNetwork = normNetwork_(network);
+    var identifier = String(entry.identifier || '').trim();
     utmList.forEach(function(utm){
       var normUtm = normUtm_(utm);
       if (!normUtm) return;
       var key = normSite + '||' + normUtm;
       if (!combosMap[key]) {
-        combosMap[key] = { site: siteName, normSite: normSite, utm_source: utm, normUtm: normUtm, active: active, network: network, normNetwork: normNetwork };
+        combosMap[key] = { site: siteName, normSite: normSite, utm_source: utm, normUtm: normUtm, active: active, network: network, normNetwork: normNetwork, identifier: identifier };
       } else {
         combosMap[key].active = combosMap[key].active || active;
         if (!combosMap[key].utm_source && utm) combosMap[key].utm_source = utm;
         if (!combosMap[key].network && network) {
           combosMap[key].network = network;
           combosMap[key].normNetwork = normNetwork;
+        }
+        if (!combosMap[key].identifier && identifier) {
+          combosMap[key].identifier = identifier;
         }
       }
     });
@@ -1151,7 +1169,8 @@ function saveAutoPricingConfig(payload) {
     if (!item || !item.site) return;
     var utmList = Array.isArray(item.utmSources) ? item.utmSources : [];
     var network = String(item.network || '').trim();
-    push([item.site, utmList.join(';'), network, parseAutoPricingBoolean_(item.active)]);
+    var identifier = String(item.identifier || '').trim();
+    push([item.site, utmList.join(';'), network, identifier, parseAutoPricingBoolean_(item.active)]);
   });
   push([]);
   push(AUTO_PRICING_BUCKET_HEADER);
