@@ -3,22 +3,22 @@
 const PRICING_SHEET_ADSELETO = 'Precificação - AdSeleto';
 const PRICING_SHEET_IGOAL = 'Precificação - Igoal';
 const BASE_SHEET_CANDIDATES = ['Base de Dados','Base de Dados - Exemplo','BD - GAM','BD - GAM1'];
-const HEADER_MAP = {
-  date: 'Data',
-  hour: 'Hora',
-  site: 'Site',
-  channel: 'Canal',
-  url: 'URL',
-  adunit: 'Bloco de Anúncio',
-  impressions: 'Impressões',
-  clicks: 'Cliques',
-  ctr: 'CTR',
-  revenue: 'Receita (USD)',
-  ecpm: 'eCPM',
-  requests: 'Solicitação AD',
-  coverage: 'Cobertura',
-  cpc: 'CPC',
-  viewability: 'Viewability',
+const HEADER_ALIASES = {
+  date: ['Data'],
+  hour: ['Hora'],
+  site: ['Site'],
+  channel: ['Canal', 'utm_source', 'UTM Source'],
+  url: ['URL'],
+  adunit: ['Bloco de Anúncio', 'Bloco', 'Ad Unit'],
+  impressions: ['Impressões', 'Impressoes'],
+  clicks: ['Cliques'],
+  ctr: ['CTR'],
+  revenue: ['Receita (USD)', 'Receita', 'Receita Total', 'Revenue'],
+  ecpm: ['eCPM', 'ECPM'],
+  requests: ['Solicitação AD', 'Solicitações', 'Solicitacoes', 'Requests'],
+  coverage: ['Cobertura', 'Coverage'],
+  cpc: ['CPC'],
+  viewability: ['Viewability']
 };
 
 const AUTO_PRICING_CONFIG_SHEET = 'Config - Precificação';
@@ -122,6 +122,31 @@ function getHeaderIndexMap_(headers) {
     map[String(headers[i]).trim()] = i;
   }
   return map;
+}
+
+function normalizeHeaderName_(name) {
+  return String(name == null ? '' : name)
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+function mapHeadersByAlias_(headers, aliasMap) {
+  var normalizedHeaders = headers.map(function(name){ return normalizeHeaderName_(name); });
+  var result = {};
+  Object.keys(aliasMap || {}).forEach(function(key){
+    var aliases = aliasMap[key];
+    if (!Array.isArray(aliases)) aliases = [aliases];
+    var normalizedAliases = aliases.map(function(name){ return normalizeHeaderName_(name); });
+    for (var i = 0; i < normalizedHeaders.length; i++) {
+      if (normalizedAliases.indexOf(normalizedHeaders[i]) !== -1) {
+        result[key] = i;
+        break;
+      }
+    }
+  });
+  return result;
 }
 
 function toNumber_(val) {
@@ -565,6 +590,12 @@ function computeAutoPricingPlan_(params) {
   params = params || {};
   var context = buildAutoPricingContext_();
   var combos = context.combos || [];
+  var siteFiltersRaw = [];
+  if (Array.isArray(params.sites)) siteFiltersRaw = params.sites.slice();
+  else if (Array.isArray(params.siteFilter)) siteFiltersRaw = params.siteFilter.slice();
+  var utmFiltersRaw = [];
+  if (Array.isArray(params.utm_sources)) utmFiltersRaw = params.utm_sources.slice();
+  else if (Array.isArray(params.utmSources)) utmFiltersRaw = params.utmSources.slice();
   if (!combos.length) {
     return {
       context: context,
@@ -577,13 +608,13 @@ function computeAutoPricingPlan_(params) {
         windowHours: [],
         excludedHour: null,
         summary: { totalEntries: 0, eligibleUpdates: 0 },
-        filters: { sites: [], utm_sources: [] }
+        filters: { sites: siteFiltersRaw.slice(), utm_sources: utmFiltersRaw.slice() }
       }
     };
   }
 
-  var siteFilterSet = createNormalizedSet_(params.sites || params.siteFilter, normSite_);
-  var utmFilterSet = createNormalizedSet_(params.utm_sources || params.utmSources, normUtm_);
+  var siteFilterSet = createNormalizedSet_(siteFiltersRaw, normSite_);
+  var utmFilterSet = createNormalizedSet_(utmFiltersRaw, normUtm_);
 
   var allowedComboMap = {};
   combos.forEach(function(combo){
@@ -615,19 +646,22 @@ function computeAutoPricingPlan_(params) {
         excludedHour: null,
         summary: { totalEntries: 0, eligibleUpdates: 0 },
         filters: {
-          sites: siteFilterSet ? Object.keys(siteFilterSet) : [],
-          utm_sources: utmFilterSet ? Object.keys(utmFilterSet) : []
+          sites: siteFiltersRaw.slice(),
+          utm_sources: utmFiltersRaw.slice()
         }
       }
     };
   }
 
   var headers = data[0] || [];
-  var idx = getHeaderIndexMap_(headers);
-  var requiredCols = [HEADER_MAP.date, HEADER_MAP.hour, HEADER_MAP.site, HEADER_MAP.channel, HEADER_MAP.url, HEADER_MAP.requests, HEADER_MAP.coverage, HEADER_MAP.ecpm, HEADER_MAP.revenue];
-  for (var c = 0; c < requiredCols.length; c++) {
-    if (idx[requiredCols[c]] == null) {
-      throw new Error('Coluna obrigatória ausente na base de dados: ' + requiredCols[c]);
+  var headerIdx = mapHeadersByAlias_(headers, HEADER_ALIASES);
+  var requiredKeys = ['date', 'hour', 'site', 'channel', 'url', 'requests', 'coverage', 'ecpm', 'revenue'];
+  for (var c = 0; c < requiredKeys.length; c++) {
+    var key = requiredKeys[c];
+    if (headerIdx[key] == null) {
+      var aliases = HEADER_ALIASES[key] || [];
+      var label = aliases.length ? aliases[0] : key;
+      throw new Error('Coluna obrigatória ausente na base de dados: ' + label);
     }
   }
 
@@ -635,11 +669,11 @@ function computeAutoPricingPlan_(params) {
   var rows = [];
   var values = data.slice(1);
   values.forEach(function(row){
-    var dateVal = row[idx[HEADER_MAP.date]];
-    var hourVal = row[idx[HEADER_MAP.hour]];
-    var siteVal = row[idx[HEADER_MAP.site]];
-    var utmVal = row[idx[HEADER_MAP.channel]];
-    var urlVal = row[idx[HEADER_MAP.url]];
+    var dateVal = row[headerIdx.date];
+    var hourVal = row[headerIdx.hour];
+    var siteVal = row[headerIdx.site];
+    var utmVal = row[headerIdx.channel];
+    var urlVal = row[headerIdx.url];
     var normSite = normSite_(siteVal);
     var normUtm = normUtm_(utmVal);
     var comboKey = normSite + '||' + normUtm;
@@ -661,10 +695,10 @@ function computeAutoPricingPlan_(params) {
       normUrl: normUrlStrict_(urlVal),
       network: comboInfo && comboInfo.network ? String(comboInfo.network) : '',
       normNetwork: comboInfo && comboInfo.normNetwork ? comboInfo.normNetwork : normNetwork_(comboInfo && comboInfo.network),
-      requests: toNumber_(row[idx[HEADER_MAP.requests]]),
-      coverage: toNumber_(row[idx[HEADER_MAP.coverage]]),
-      ecpm: toNumber_(row[idx[HEADER_MAP.ecpm]]),
-      revenue: toNumber_(row[idx[HEADER_MAP.revenue]])
+      requests: toNumber_(row[headerIdx.requests]),
+      coverage: toNumber_(row[headerIdx.coverage]),
+      ecpm: toNumber_(row[headerIdx.ecpm]),
+      revenue: toNumber_(row[headerIdx.revenue])
     });
   });
 
@@ -682,8 +716,8 @@ function computeAutoPricingPlan_(params) {
         excludedHour: null,
         summary: { totalEntries: 0, eligibleUpdates: 0 },
         filters: {
-          sites: siteFilterSet ? Object.keys(siteFilterSet) : [],
-          utm_sources: utmFilterSet ? Object.keys(utmFilterSet) : []
+          sites: siteFiltersRaw.slice(),
+          utm_sources: utmFiltersRaw.slice()
         }
       }
     };
@@ -979,8 +1013,8 @@ function computeAutoPricingPlan_(params) {
         eligibleUpdates: eligibleUpdates
       },
       filters: {
-        sites: siteFilterSet ? Object.keys(siteFilterSet) : [],
-        utm_sources: utmFilterSet ? Object.keys(utmFilterSet) : []
+        sites: siteFiltersRaw.slice(),
+        utm_sources: utmFiltersRaw.slice()
       }
     }
   };
