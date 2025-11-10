@@ -986,7 +986,18 @@ function todayIso(){
 
     function getMultiSelectValues(select) {
       if (!select) return [];
-      return Array.from(select.selectedOptions || []).map(function(option){ return option.value; });
+      var values = [];
+      var selected = select.selectedOptions;
+      if (selected && typeof selected.length === 'number') {
+        values = Array.prototype.map.call(selected, function(option){ return option.value; });
+      } else {
+        Array.prototype.forEach.call(select.options || [], function(option){
+          if (option && option.selected) {
+            values.push(option.value);
+          }
+        });
+      }
+      return values;
     }
 
     function renderAutoConfig() {
