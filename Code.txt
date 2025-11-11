@@ -1163,7 +1163,19 @@ function runAutoPricing(params) {
   params = params || {};
   params.trigger = params.trigger || 'manual';
   var plan = computeAutoPricingPlan_(params);
-  var updates = plan.analysis.entries.filter(function(entry){ return entry.shouldUpdate; });
+  var selectedSet = null;
+  if (Array.isArray(params.entryKeys) && params.entryKeys.length) {
+    selectedSet = {};
+    params.entryKeys.forEach(function(key){
+      if (key == null) return;
+      selectedSet[String(key)] = true;
+    });
+  }
+  var updates = plan.analysis.entries.filter(function(entry){
+    if (!entry.shouldUpdate) return false;
+    if (selectedSet && !selectedSet[entry.key]) return false;
+    return true;
+  });
   if (!updates.length) {
     return {
       ok: true,

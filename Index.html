@@ -111,26 +111,7 @@
               <div id="auto-filter-utms"></div>
             </div>
           </div>
-          <div class="grid md:grid-cols-3 gap-4 text-sm">
-            <div class="p-4 pill rounded-xl space-y-1">
-              <p class="text-xs uppercase tracking-wide text-slate-400">Horas consideradas</p>
-              <p class="text-base font-semibold text-slate-100" id="auto-analysis-hours">—</p>
-            </div>
-            <div class="p-4 pill rounded-xl space-y-1">
-              <p class="text-xs uppercase tracking-wide text-slate-400">Hora descartada</p>
-              <p class="text-base font-semibold text-slate-100" id="auto-analysis-excluded">—</p>
-            </div>
-            <div class="p-4 pill rounded-xl space-y-1">
-              <p class="text-xs uppercase tracking-wide text-slate-400">Atualizações sugeridas</p>
-              <p class="text-base font-semibold text-slate-100" id="auto-analysis-eligible">—</p>
-            </div>
-          </div>
-          <div class="inline-flex rounded-xl pill p-1">
-            <button id="auto-tab-site" type="button" class="px-4 py-2 rounded-lg bg-teal-600 text-white text-sm font-semibold">Visão por site</button>
-            <button id="auto-tab-utm" type="button" class="px-4 py-2 rounded-lg text-slate-300 hover:text-white text-sm font-semibold">Visão por utm_source</button>
-          </div>
-          <div id="auto-analysis-site" class="space-y-4"></div>
-          <div id="auto-analysis-utm" class="space-y-4 hidden"></div>
+          <div id="auto-analysis-utm" class="space-y-4"></div>
         </div>
       </div>
 
@@ -230,7 +211,7 @@
       analysis: { entries: [], siteRows: [], utmRows: [], summary: { totalEntries: 0, eligibleUpdates: 0 }, windowHours: [], excludedHour: null, filters: { sites: [], utm_sources: [] } },
       filters: { sites: [], utms: [] },
       filterTimer: null,
-      analysisTab: 'site',
+      selectedEntries: {},
       primaryView: 'consulta'
     };
 
@@ -607,6 +588,7 @@
       if (AutoPricing.filterTimer) {
         clearTimeout(AutoPricing.filterTimer);
       }
+      AutoPricing.selectedEntries = {};
       AutoPricing.filterTimer = setTimeout(function(){
         var payload = {
           sites: (AutoPricing.filters && AutoPricing.filters.sites) ? AutoPricing.filters.sites.slice() : [],
@@ -614,6 +596,22 @@
         };
         loadAutoPricingState(payload, false);
       }, 250);
+    }
+
+    function pruneAutoPricingSelection(){
+      var selection = AutoPricing.selectedEntries || {};
+      var available = {};
+      (AutoPricing.analysis && AutoPricing.analysis.entries ? AutoPricing.analysis.entries : []).forEach(function(entry){
+        if (!entry || !entry.key || !entry.shouldUpdate) return;
+        available[String(entry.key)] = true;
+      });
+      var next = {};
+      Object.keys(selection).forEach(function(key){
+        if (!selection[key]) return;
+        if (!available[key]) return;
+        next[key] = true;
+      });
+      AutoPricing.selectedEntries = next;
     }
 
     function describeAutoPricingStatus(entry){
@@ -645,48 +643,14 @@
         'auto-summary-eligible': eligibleLabel,
         'auto-summary-interval': intervalLabel,
         'auto-summary-window': windowLabel,
-        'auto-summary-minrequests': minRequestLabel,
-        'auto-analysis-hours': hoursLabel,
-        'auto-analysis-excluded': excludedLabel,
-        'auto-analysis-eligible': eligibleLabel
+        'auto-summary-minrequests': minRequestLabel
       };
       Object.keys(summaryMapping).forEach(function(id){
         var el = byId(id);
         if (el) el.textContent = summaryMapping[id];
       });
 
-      setAutoAnalysisTab(AutoPricing.analysisTab);
-
-      var siteContainer = byId('auto-analysis-site');
-      if (siteContainer) {
-        var siteRows = analysis.siteRows || [];
-        if (!siteRows.length) {
-          siteContainer.innerHTML = '<p class="text-sm text-slate-300">Nenhum site encontrado para os filtros selecionados.</p>';
-        } else {
-          var rowsHtml = siteRows.map(function(row){
-            var requests = num(row.requests || 0, 0);
-            var coverage = pct(row.coverage || 0, 2);
-            var ecpm = money(row.ecpm || 0);
-            var coefficient = row.coefficient != null && row.coefficient !== '' ? num(row.coefficient, 2) : '—';
-            var newRule = row.bucketRule != null && row.bucketRule !== '' ? money(row.bucketRule) : '—';
-            var currentRule = row.currentRule != null && row.currentRule !== '' ? money(row.currentRule) : '—';
-            var networks = row.networks && row.networks.length ? row.networks.map(escapeHtml).join(', ') : '—';
-            var status = describeAutoPricingStatus(row);
-            return '<tr>'+
-              '<td class="py-2 px-2 font-medium text-slate-200">'+escapeHtml(row.site || '')+'</td>'+
-              '<td class="py-2 px-2 text-slate-300">'+networks+'</td>'+
-              '<td class="py-2 px-2 text-right">'+requests+'</td>'+
-              '<td class="py-2 px-2 text-right">'+coverage+'</td>'+
-              '<td class="py-2 px-2 text-right">'+ecpm+'</td>'+
-              '<td class="py-2 px-2 text-right">'+coefficient+'</td>'+
-              '<td class="py-2 px-2 text-right">'+newRule+'</td>'+
-              '<td class="py-2 px-2 text-right">'+currentRule+'</td>'+
-              '<td class="py-2 px-2"><span class="'+status.className+'">'+status.label+'</span></td>'+
-            '</tr>';
-          }).join('');
-          siteContainer.innerHTML = '<div class="overflow-auto"><table class="w-full text-sm pricing-table"><thead class="text-slate-400"><tr><th class="text-left font-semibold py-2 px-2">Site</th><th class="text-left font-semibold py-2 px-2">Redes</th><th class="text-right font-semibold py-2 px-2">Solicitações</th><th class="text-right font-semibold py-2 px-2">Cobertura</th><th class="text-right font-semibold py-2 px-2">eCPM</th><th class="text-right font-semibold py-2 px-2">Coeficiente</th><th class="text-right font-semibold py-2 px-2">Nova regra</th><th class="text-right font-semibold py-2 px-2">Regra atual</th><th class="text-left font-semibold py-2 px-2">Status</th></tr></thead><tbody>'+rowsHtml+'</tbody></table></div>';
-        }
-      }
+      pruneAutoPricingSelection();
 
       var utmContainer = byId('auto-analysis-utm');
       if (utmContainer) {
@@ -731,10 +695,21 @@
             var coefficient = entry.coefficient != null && entry.coefficient !== '' ? num(entry.coefficient, 2) : '—';
             var newRule = entry.bucketRule != null && entry.bucketRule !== '' ? money(entry.bucketRule) : '—';
             var currentRule = entry.currentRule != null && entry.currentRule !== '' ? money(entry.currentRule) : '—';
-            var hours = (entry.hoursUsed && entry.hoursUsed.length) ? entry.hoursUsed.join(', ') : '—';
             var status = describeAutoPricingStatus(entry);
             var network = entry.network ? escapeHtml(entry.network) : '—';
+            var attrs = ['type="checkbox"', 'class="auto-entry-select h-4 w-4 text-emerald-500 rounded border-slate-600 bg-slate-800"', 'data-key="'+escapeHtml(entry.key || '')+'"', 'aria-label="Selecionar URL"'];
+            if (AutoPricing.selectedEntries && AutoPricing.selectedEntries[entry.key]) {
+              attrs.push('checked');
+            }
+            if (!entry.shouldUpdate) {
+              attrs.push('disabled');
+              if (entry.reason) {
+                attrs.push('title="'+escapeHtml(entry.reason)+'"');
+              }
+            }
+            var checkbox = '<input '+attrs.join(' ')+' />';
             return '<tr>'+
+              '<td class="py-2 px-2 text-center align-middle">'+checkbox+'</td>'+
               '<td class="py-2 px-2 text-slate-200">'+escapeHtml(entry.site || '')+'</td>'+
               '<td class="py-2 px-2 text-slate-300">'+escapeHtml(entry.utm_source || '')+'</td>'+
               '<td class="py-2 px-2 text-slate-300">'+network+'</td>'+
@@ -745,11 +720,10 @@
               '<td class="py-2 px-2 text-right">'+coefficient+'</td>'+
               '<td class="py-2 px-2 text-right">'+currentRule+'</td>'+
               '<td class="py-2 px-2 text-right">'+newRule+'</td>'+
-              '<td class="py-2 px-2">'+hours+'</td>'+
               '<td class="py-2 px-2"><span class="'+status.className+'">'+status.label+'</span></td>'+
             '</tr>';
           }).join('');
-          detailHtml = '<div class="pt-4 border-t border-slate-700/50 space-y-3"><h4 class="text-sm font-semibold text-slate-200">Detalhe por URL</h4><div class="overflow-auto"><table class="w-full text-sm pricing-table"><thead class="text-slate-400"><tr><th class="text-left font-semibold py-2 px-2">Site</th><th class="text-left font-semibold py-2 px-2">utm_source</th><th class="text-left font-semibold py-2 px-2">Rede</th><th class="text-left font-semibold py-2 px-2">URL</th><th class="text-right font-semibold py-2 px-2">Solicitações</th><th class="text-right font-semibold py-2 px-2">Cobertura</th><th class="text-right font-semibold py-2 px-2">eCPM</th><th class="text-right font-semibold py-2 px-2">Coeficiente</th><th class="text-right font-semibold py-2 px-2">Regra atual</th><th class="text-right font-semibold py-2 px-2">Nova regra</th><th class="text-left font-semibold py-2 px-2">Horas utilizadas</th><th class="text-left font-semibold py-2 px-2">Status</th></tr></thead><tbody>'+detailTable+'</tbody></table></div></div>';
+          detailHtml = '<div class="pt-4 border-t border-slate-700/50 space-y-3"><div class="flex flex-wrap items-center justify-between gap-2"><h4 class="text-sm font-semibold text-slate-200">Detalhe por URL</h4><p class="text-xs text-slate-400">Marque as URLs que deseja sincronizar manualmente.</p></div><div class="overflow-auto"><table class="w-full text-sm pricing-table"><thead class="text-slate-400"><tr><th class="text-center font-semibold py-2 px-2 w-14">Selecionar</th><th class="text-left font-semibold py-2 px-2">Site</th><th class="text-left font-semibold py-2 px-2">utm_source</th><th class="text-left font-semibold py-2 px-2">Rede</th><th class="text-left font-semibold py-2 px-2">URL</th><th class="text-right font-semibold py-2 px-2">Solicitações</th><th class="text-right font-semibold py-2 px-2">Cobertura</th><th class="text-right font-semibold py-2 px-2">eCPM</th><th class="text-right font-semibold py-2 px-2">Coeficiente</th><th class="text-right font-semibold py-2 px-2">Regra atual</th><th class="text-right font-semibold py-2 px-2">Nova regra</th><th class="text-left font-semibold py-2 px-2">Status</th></tr></thead><tbody>'+detailTable+'</tbody></table></div></div>';
         }
         utmContainer.innerHTML = aggregatedHtml + detailHtml;
       }
@@ -810,6 +784,8 @@
       AutoPricing.minRequests = data.minRequests;
       AutoPricing.analysis = data.analysis || { entries: [], siteRows: [], utmRows: [], summary: { totalEntries: 0, eligibleUpdates: 0 }, windowHours: [], excludedHour: null, filters: { sites: [], utm_sources: [] } };
       AutoPricing.filters = { sites: AutoPricing.analysis.filters ? (AutoPricing.analysis.filters.sites || []) : [], utms: AutoPricing.analysis.filters ? (AutoPricing.analysis.filters.utm_sources || []) : [] };
+      AutoPricing.selectedEntries = AutoPricing.selectedEntries || {};
+      pruneAutoPricingSelection();
       sanitizeAutoPricingFilters();
       renderAutoConfig();
       renderAutoPricingFilters();
@@ -873,10 +849,18 @@
       sanitizeAutoPricingFilters();
       var filters = { sites: AutoPricing.filters && AutoPricing.filters.sites ? AutoPricing.filters.sites : [], utm_sources: AutoPricing.filters && AutoPricing.filters.utms ? AutoPricing.filters.utms : [] };
       var payload = { sites: filters.sites.slice(), utm_sources: filters.utm_sources.slice(), includeInactive: true };
+      var selectedKeys = [];
+      Object.keys(AutoPricing.selectedEntries || {}).forEach(function(key){
+        if (AutoPricing.selectedEntries[key]) selectedKeys.push(key);
+      });
+      if (selectedKeys.length) {
+        payload.entryKeys = selectedKeys;
+      }
       showLoading('Executando precificação automática...');
       google.script.run
         .withSuccessHandler(function(res){
           hideLoading();
+          AutoPricing.selectedEntries = {};
           if (res && res.state) {
             applyAutoPricingState(res.state);
           }
@@ -885,26 +869,6 @@
         })
         .withFailureHandler(function(err){ hideLoading(); var message = err && err.message ? err.message : 'Não foi possível executar a precificação automática.'; showToast(message, 'error'); })
         .runAutoPricing(payload);
-    }
-
-    function setAutoAnalysisTab(tab){
-      AutoPricing.analysisTab = tab === 'utm' ? 'utm' : 'site';
-      var siteBtn = byId('auto-tab-site');
-      var utmBtn = byId('auto-tab-utm');
-      var siteView = byId('auto-analysis-site');
-      var utmView = byId('auto-analysis-utm');
-      if (siteBtn) {
-        siteBtn.classList.toggle('bg-teal-600', AutoPricing.analysisTab === 'site');
-        siteBtn.classList.toggle('text-white', AutoPricing.analysisTab === 'site');
-        siteBtn.classList.toggle('text-slate-300', AutoPricing.analysisTab !== 'site');
-      }
-      if (utmBtn) {
-        utmBtn.classList.toggle('bg-teal-600', AutoPricing.analysisTab === 'utm');
-        utmBtn.classList.toggle('text-white', AutoPricing.analysisTab === 'utm');
-        utmBtn.classList.toggle('text-slate-300', AutoPricing.analysisTab !== 'utm');
-      }
-      if (siteView) siteView.classList.toggle('hidden', AutoPricing.analysisTab !== 'site');
-      if (utmView) utmView.classList.toggle('hidden', AutoPricing.analysisTab !== 'utm');
     }
 
     function setAutoPrimaryView(view){
@@ -942,10 +906,21 @@
       if (refreshBtn) refreshBtn.addEventListener('click', function(){ loadAutoPricingState(null, true); });
       var runBtn = byId('auto-btn-run');
       if (runBtn) runBtn.addEventListener('click', runAutoPricingHandler);
-      var tabSite = byId('auto-tab-site');
-      if (tabSite) tabSite.addEventListener('click', function(){ setAutoAnalysisTab('site'); });
-      var tabUtm = byId('auto-tab-utm');
-      if (tabUtm) tabUtm.addEventListener('click', function(){ setAutoAnalysisTab('utm'); });
+      var analysisContainer = byId('auto-analysis-utm');
+      if (analysisContainer) {
+        analysisContainer.addEventListener('change', function(event){
+          var target = event && event.target;
+          if (!target || !target.classList || !target.classList.contains('auto-entry-select')) return;
+          var key = target.getAttribute('data-key');
+          if (!key) return;
+          AutoPricing.selectedEntries = AutoPricing.selectedEntries || {};
+          if (target.checked && !target.disabled) {
+            AutoPricing.selectedEntries[String(key)] = true;
+          } else {
+            delete AutoPricing.selectedEntries[String(key)];
+          }
+        });
+      }
       var viewDataBtn = byId('auto-view-btn-data');
       if (viewDataBtn) viewDataBtn.addEventListener('click', function(){ setAutoPrimaryView('consulta'); });
       var viewConfigBtn = byId('auto-view-btn-config');
