@@ -31,7 +31,7 @@ const AUTO_PRICING_MIN_REQUESTS = 10;
 const AUTO_PRICING_RANGE_HEADER = ['Cobertura Superior','Cobertura Inferior','Coeficiente'];
 const AUTO_PRICING_SITE_HEADER = ['Site','utm_source (separe por ;)','Rede','Company ID / PMD ID','Ativo?'];
 const AUTO_PRICING_BUCKET_HEADER = ['Site','Buckets disponíveis (JSON ou separados por ;)'];
-const AUTO_PRICING_LOG_HEADERS = ['Timestamp','Disparo','Site','Rede','UTM Source','URL','Regra Atual','Nova Regra','Cobertura (%)','eCPM','Coeficiente','Bucket Aplicado','Solicitações','Observações'];
+const AUTO_PRICING_LOG_HEADERS = ['Timestamp','Disparo','Site','Rede','UTM Source','URL','Regra Atual','Nova Regra','Cobertura (%)','eCPM','Coeficiente','Bucket Aplicado','Solicitações','Observações','Payload enviado'];
 
 function doGet() {
   return HtmlService.createTemplateFromFile('index')
@@ -121,9 +121,13 @@ function ensureAutoPricingLogSheet_() {
   var sh = ss.getSheetByName(AUTO_PRICING_LOG_SHEET);
   if (!sh) {
     sh = ss.insertSheet(AUTO_PRICING_LOG_SHEET);
-    sh.getRange(1,1,1,AUTO_PRICING_LOG_HEADERS.length).setValues([AUTO_PRICING_LOG_HEADERS]);
-    sh.setFrozenRows(1);
   }
+  var neededCols = AUTO_PRICING_LOG_HEADERS.length;
+  if (sh.getMaxColumns() < neededCols) {
+    sh.insertColumnsAfter(sh.getMaxColumns(), neededCols - sh.getMaxColumns());
+  }
+  sh.getRange(1, 1, 1, neededCols).setValues([AUTO_PRICING_LOG_HEADERS]);
+  sh.setFrozenRows(1);
   return sh;
 }
 
@@ -258,6 +262,80 @@ function normNetwork_(val) {
 
 function normAdUnit_(val) {
   return String(val == null ? '' : val).trim().toLowerCase();
+}
+
+function coalesceForPayload_() {
+  for (var i = 0; i < arguments.length; i++) {
+    var value = arguments[i];
+    if (value === undefined || value === null) continue;
+    if (typeof value === 'number') {
+      if (!isNaN(value)) return value;
+      continue;
+    }
+    var str = String(value).trim();
+    if (str) return str;
+  }
+  return '';
+}
+
+function buildPricingPayloadLog_(networkKey, entry, ruleInfo, formattedRuleValue, rawRuleValue) {
+  networkKey = normNetwork_(networkKey);
+  entry = entry || {};
+  ruleInfo = ruleInfo || {};
+  var slugFromRule = ruleInfo.url ? normUrlStrict_(ruleInfo.url) : '';
+  var slugFromEntry = entry.normUrl || '';
+  var slugFallback = entry.url ? normUrlStrict_(entry.url) : '';
+  var priceRuleValue = rawRuleValue;
+  if (!isFinite(priceRuleValue)) {
+    var parsed = toNumber_(formattedRuleValue);
+    if (isFinite(parsed)) {
+      priceRuleValue = parsed;
+    } else {
+      priceRuleValue = formattedRuleValue != null ? formattedRuleValue : '';
+    }
+  }
+  if (isFinite(priceRuleValue)) {
+    priceRuleValue = Math.round(priceRuleValue * 100) / 100;
+  }
+  var payload;
+  if (networkKey === 'adseleto') {
+    payload = {
+      domain_id: coalesceForPayload_(ruleInfo.domain_id, entry.domain_id, entry.site),
+      price_rule: priceRuleValue,
+      utm_source: coalesceForPayload_(ruleInfo.utm_source, entry.utm_source),
+      slot_id: coalesceForPayload_(ruleInfo.slot_id, entry.slot_id, entry.adunit),
+      url: coalesceForPayload_(slugFromRule, slugFromEntry, slugFallback)
+    };
+  } else if (networkKey === 'igoal') {
+    payload = {
+      dominio: coalesceForPayload_(ruleInfo.dominio, ruleInfo.domain_id, entry.domain_id, entry.site),
+      utm_source: coalesceForPayload_(ruleInfo.utm_source, entry.utm_source),
+      url: coalesceForPayload_(slugFromRule, slugFromEntry, slugFallback),
+      bloco: coalesceForPayload_(ruleInfo.bloco, ruleInfo.slot_id, entry.bloco, entry.adunit),
+      company_id: coalesceForPayload_(ruleInfo.company_id, entry.company_id, entry.identifier),
+      price_rule: priceRuleValue
+    };
+  } else {
+    return '';
+  }
+
+  var normalizedPayload = {};
+  Object.keys(payload).forEach(function(key){
+    var value = payload[key];
+    if (value === undefined || value === null) {
+      normalizedPayload[key] = '';
+    } else if (typeof value === 'number') {
+      normalizedPayload[key] = isFinite(value) ? value : '';
+    } else {
+      normalizedPayload[key] = String(value).trim();
+    }
+  });
+
+  try {
+    return JSON.stringify(normalizedPayload);
+  } catch (err) {
+    return '';
+  }
 }
 
 function matchesAllowedAdUnitTokens_(value) {
@@ -1270,18 +1348,19 @@ function runAutoPricing(params) {
     var syncCol = ctx.syncCol;
     updates.filter(function(entry){ return entry.normNetwork === networkKey; }).forEach(function(entry){
       var ruleInfo = ctx.map[entry.key];
+      var newValue = entry.bucketRule;
+      var formatted = ctx.formatRule ? ctx.formatRule(newValue) : newValue;
+      var payloadLog = buildPricingPayloadLog_(networkKey, entry, ruleInfo, formatted, newValue);
       if (!ruleInfo || !ruleInfo.rowIndex) {
-        logRows.push([timestamp, params.trigger, entry.site, entry.network, entry.utm_source, entry.url, entry.currentRule, entry.bucketRule, entry.coverage, entry.ecpm, entry.coefficient, entry.bucketLabel, entry.requests, 'Regra não encontrada na aba de precificação (Bloco: ' + (entry.adunit || '-') + ')']);
+        logRows.push([timestamp, params.trigger, entry.site, entry.network, entry.utm_source, entry.url, entry.currentRule, entry.bucketRule, entry.coverage, entry.ecpm, entry.coefficient, entry.bucketLabel, entry.requests, 'Regra não encontrada na aba de precificação (Bloco: ' + (entry.adunit || '-') + ')', payloadLog]);
         entry.reason = 'Regra não encontrada na aba de precificação';
         return;
       }
-      var newValue = entry.bucketRule;
-      var formatted = ctx.formatRule ? ctx.formatRule(newValue) : newValue;
       ctx.sheet.getRange(ruleInfo.rowIndex, priceCol + 1).setValue(formatted);
       if (syncCol != null && syncCol >= 0) {
         ctx.sheet.getRange(ruleInfo.rowIndex, syncCol + 1).setValue('Sim');
       }
-      logRows.push([timestamp, params.trigger, entry.site, entry.network, entry.utm_source, entry.url, ruleInfo.price_rule, newValue, entry.coverage, entry.ecpm, entry.coefficient, entry.bucketLabel, entry.requests, 'Atualizado via automação (Bloco: ' + (entry.adunit || '-') + ')']);
+      logRows.push([timestamp, params.trigger, entry.site, entry.network, entry.utm_source, entry.url, ruleInfo.price_rule, newValue, entry.coverage, entry.ecpm, entry.coefficient, entry.bucketLabel, entry.requests, 'Atualizado via automação (Bloco: ' + (entry.adunit || '-') + ')', payloadLog]);
     });
   });
 
