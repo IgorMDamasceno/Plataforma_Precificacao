@@ -170,6 +170,23 @@ function toNumber_(val) {
   return isNaN(n) ? 0 : n;
 }
 
+function parseCoverageValue_(val) {
+  if (val == null) return 0;
+  if (typeof val === 'number') {
+    if (!isFinite(val)) return 0;
+    if (val >= 0 && val <= 1) return val * 100;
+    return val;
+  }
+  var raw = String(val).trim();
+  if (!raw) return 0;
+  var hasPercent = raw.indexOf('%') !== -1;
+  var num = toNumber_(raw);
+  if (!isFinite(num)) return 0;
+  if (hasPercent) return num;
+  if (num >= 0 && num <= 1) return num * 100;
+  return num;
+}
+
 function formatPriceRuleIgoal_(value) {
   if (value === null || value === undefined) return '';
   var s = String(value).trim();
@@ -333,8 +350,8 @@ function loadAutoPricingConfig_() {
     var isEmpty = row.every(function(cell){ return String(cell || '').trim() === ''; });
     if (isEmpty) return;
     if (section === 'ranges') {
-      var upper = toNumber_(row[0]);
-      var lower = toNumber_(row[1]);
+      var upper = parseCoverageValue_(row[0]);
+      var lower = parseCoverageValue_(row[1]);
       var coefficient = toNumber_(row[2]);
       if (isFinite(upper) && isFinite(lower) && isFinite(coefficient)) {
         config.ranges.push({ upper: upper, lower: lower, coefficient: coefficient });
@@ -746,7 +763,7 @@ function computeAutoPricingPlan_(params) {
       network: comboInfo && comboInfo.network ? String(comboInfo.network) : '',
       normNetwork: comboInfo && comboInfo.normNetwork ? comboInfo.normNetwork : normNetwork_(comboInfo && comboInfo.network),
       requests: toNumber_(row[headerIdx.requests]),
-      coverage: toNumber_(row[headerIdx.coverage]),
+      coverage: parseCoverageValue_(row[headerIdx.coverage]),
       ecpm: toNumber_(row[headerIdx.ecpm]),
       revenue: toNumber_(row[headerIdx.revenue])
     });
