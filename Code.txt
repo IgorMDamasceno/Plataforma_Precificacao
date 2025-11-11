@@ -264,6 +264,14 @@ function normAdUnit_(val) {
   return String(val == null ? '' : val).trim().toLowerCase();
 }
 
+function generateSpnpriceId_() {
+  var uuid = Utilities.getUuid();
+  if (!uuid) {
+    return 'auto-' + Math.floor(Math.random() * 1e9);
+  }
+  return 'auto-' + uuid.replace(/-/g, '').slice(0, 16).toLowerCase();
+}
+
 function coalesceForPayload_() {
   for (var i = 0; i < arguments.length; i++) {
     var value = arguments[i];
@@ -300,10 +308,12 @@ function buildPricingPayloadLog_(networkKey, entry, ruleInfo, formattedRuleValue
   var payload;
   if (networkKey === 'adseleto') {
     payload = {
+      domain_id: coalesceForPayload_(ruleInfo.domain_id, entry.domain_id, entry.identifier, entry.site),
       price_rule: priceRuleValue,
       utm_source: coalesceForPayload_(ruleInfo.utm_source, entry.utm_source),
       slot_id: coalesceForPayload_(ruleInfo.slot_id, entry.slot_id, entry.adunit),
-      url: coalesceForPayload_(slugFromRule, slugFromEntry, slugFallback)
+      url: coalesceForPayload_(slugFromRule, slugFromEntry, slugFallback),
+      spnprice_id: coalesceForPayload_(ruleInfo.spnprice_id, entry.spnprice_id)
     };
   } else if (networkKey === 'igoal') {
     payload = {
@@ -1007,8 +1017,8 @@ function computeAutoPricingPlan_(params) {
       identifier: agg.identifier,
       slot_id: ruleInfo && ruleInfo.slot_id ? ruleInfo.slot_id : '',
       bloco: ruleInfo && ruleInfo.bloco ? ruleInfo.bloco : '',
-      domain_id: ruleInfo && ruleInfo.domain_id ? ruleInfo.domain_id : (ruleInfo && ruleInfo.dominio ? ruleInfo.dominio : ''),
-      company_id: ruleInfo && ruleInfo.company_id ? ruleInfo.company_id : '',
+      domain_id: ruleInfo && ruleInfo.domain_id ? ruleInfo.domain_id : (ruleInfo && ruleInfo.dominio ? ruleInfo.dominio : (agg.normNetwork === 'adseleto' ? agg.identifier : '')),
+      company_id: ruleInfo && ruleInfo.company_id ? ruleInfo.company_id : (agg.normNetwork === 'igoal' ? agg.identifier : ''),
       rule_id: ruleInfo && ruleInfo.rule_id ? ruleInfo.rule_id : '',
       spnprice_id: ruleInfo && ruleInfo.spnprice_id ? ruleInfo.spnprice_id : '',
       requests: requests,
@@ -1059,8 +1069,8 @@ function computeAutoPricingPlan_(params) {
         identifier: comboInfo.identifier || '',
         slot_id: info.slot_id || '',
         bloco: info.bloco || '',
-        domain_id: info.domain_id || info.dominio || '',
-        company_id: info.company_id || '',
+        domain_id: info.domain_id || info.dominio || (networkKey === 'adseleto' ? (comboInfo.identifier || '') : ''),
+        company_id: info.company_id || (networkKey === 'igoal' ? (comboInfo.identifier || '') : ''),
         rule_id: info.rule_id || '',
         spnprice_id: info.spnprice_id || '',
         requests: 0,
@@ -1305,6 +1315,194 @@ function saveAutoPricingConfig(payload) {
   return getAutoPricingState();
 }
 
+function ensureRuleRowForEntry_(networkKey, ctx, entry, formattedValue, rawValue) {
+  networkKey = normNetwork_(networkKey);
+  if (!ctx || !ctx.sheet) return null;
+  var headers = ctx.headers || [];
+  if (!headers.length) return null;
+  var idx = ctx.idx || {};
+  var syncCol = ctx.syncCol;
+  var sheet = ctx.sheet;
+  if (networkKey === 'adseleto') {
+    var domainId = coalesceForPayload_(entry.domain_id, entry.identifier);
+    var utm = coalesceForPayload_(entry.utm_source);
+    var slot = coalesceForPayload_(entry.slot_id, entry.adunit);
+    var slug = entry.normUrl || normUrlStrict_(entry.url);
+    if (!domainId) {
+      entry.reason = entry.reason || 'ID do domínio não configurado na aba de precificação';
+      return null;
+    }
+    if (!slot) {
+      entry.reason = entry.reason || 'Bloco/slot não configurado para a regra de precificação';
+      return null;
+    }
+    if (!slug) {
+      entry.reason = entry.reason || 'URL inválida para criação da regra';
+      return null;
+    }
+    var spnId = entry.spnprice_id || generateSpnpriceId_();
+    var rowValues = [];
+    for (var i = 0; i < headers.length; i++) rowValues.push('');
+    if (idx['spnprice_id'] != null) rowValues[idx['spnprice_id']] = spnId;
+    if (idx['domain_id'] != null) rowValues[idx['domain_id']] = domainId;
+    if (idx['price_rule'] != null) rowValues[idx['price_rule']] = formattedValue;
+    if (idx['utm_source'] != null) rowValues[idx['utm_source']] = utm;
+    if (idx['slot_id'] != null) rowValues[idx['slot_id']] = slot;
+    if (idx['url'] != null) rowValues[idx['url']] = slug;
+    if (syncCol != null && syncCol >= 0) rowValues[syncCol] = 'Sim';
+    var rowIndex = sheet.getLastRow() + 1;
+    sheet.getRange(rowIndex, 1, 1, headers.length).setValues([rowValues]);
+    var info = {
+      price_rule: rawValue,
+      rowIndex: rowIndex,
+      domain_id: domainId,
+      utm_source: utm,
+      url: slug,
+      slot_id: slot,
+      adunit: slot,
+      normAdUnit: normAdUnit_(slot),
+      spnprice_id: spnId,
+      wasRuleCreated: true
+    };
+    ctx.map[entry.key] = info;
+    entry.domain_id = domainId;
+    entry.slot_id = slot;
+    entry.spnprice_id = spnId;
+    entry.wasRuleCreated = true;
+    return info;
+  } else if (networkKey === 'igoal') {
+    var dominio = coalesceForPayload_(entry.site, entry.domain_id);
+    var utmIgoal = coalesceForPayload_(entry.utm_source);
+    var bloco = coalesceForPayload_(entry.bloco, entry.adunit);
+    var slugIgoal = entry.normUrl || normUrlStrict_(entry.url);
+    var companyId = coalesceForPayload_(entry.company_id, entry.identifier);
+    if (!dominio) {
+      entry.reason = entry.reason || 'Domínio não configurado para a Igoal';
+      return null;
+    }
+    if (!companyId) {
+      entry.reason = entry.reason || 'Company ID não configurado para a Igoal';
+      return null;
+    }
+    if (!bloco) {
+      entry.reason = entry.reason || 'Bloco não configurado para a Igoal';
+      return null;
+    }
+    if (!slugIgoal) {
+      entry.reason = entry.reason || 'URL inválida para criação da regra';
+      return null;
+    }
+    var rowValuesIgoal = [];
+    for (var j = 0; j < headers.length; j++) rowValuesIgoal.push('');
+    if (idx['rule_id'] != null) rowValuesIgoal[idx['rule_id']] = '';
+    if (idx['dominio'] != null) rowValuesIgoal[idx['dominio']] = dominio;
+    if (idx['utm_source'] != null) rowValuesIgoal[idx['utm_source']] = utmIgoal;
+    if (idx['url'] != null) rowValuesIgoal[idx['url']] = slugIgoal;
+    if (idx['bloco'] != null) rowValuesIgoal[idx['bloco']] = bloco;
+    if (idx['company_id'] != null) rowValuesIgoal[idx['company_id']] = companyId;
+    if (idx['price_rule'] != null) rowValuesIgoal[idx['price_rule']] = formattedValue;
+    if (syncCol != null && syncCol >= 0) rowValuesIgoal[syncCol] = 'Sim';
+    var rowIndexIgoal = sheet.getLastRow() + 1;
+    sheet.getRange(rowIndexIgoal, 1, 1, headers.length).setValues([rowValuesIgoal]);
+    var infoIgoal = {
+      price_rule: rawValue,
+      rowIndex: rowIndexIgoal,
+      dominio: dominio,
+      utm_source: utmIgoal,
+      url: slugIgoal,
+      bloco: bloco,
+      adunit: bloco,
+      normAdUnit: normAdUnit_(bloco),
+      company_id: companyId,
+      wasRuleCreated: true
+    };
+    ctx.map[entry.key] = infoIgoal;
+    entry.domain_id = dominio;
+    entry.company_id = companyId;
+    entry.bloco = bloco;
+    entry.wasRuleCreated = true;
+    return infoIgoal;
+  }
+  return null;
+}
+
+function prepareRuleInfoForUpdate_(networkKey, ctx, entry, ruleInfo) {
+  networkKey = normNetwork_(networkKey);
+  if (!ctx || !ctx.sheet || !ruleInfo || !ruleInfo.rowIndex) return ruleInfo;
+  var idx = ctx.idx || {};
+  var sheet = ctx.sheet;
+  if (networkKey === 'adseleto') {
+    var domainValue = coalesceForPayload_(ruleInfo.domain_id, entry.domain_id, entry.identifier);
+    if (domainValue && idx['domain_id'] != null && String(ruleInfo.domain_id || '').trim() !== String(domainValue).trim()) {
+      sheet.getRange(ruleInfo.rowIndex, idx['domain_id'] + 1).setValue(domainValue);
+      ruleInfo.domain_id = domainValue;
+    }
+    if (domainValue) entry.domain_id = domainValue;
+    var slotValue = coalesceForPayload_(ruleInfo.slot_id, entry.slot_id, entry.adunit);
+    if (slotValue && idx['slot_id'] != null && String(ruleInfo.slot_id || '').trim() !== String(slotValue).trim()) {
+      sheet.getRange(ruleInfo.rowIndex, idx['slot_id'] + 1).setValue(slotValue);
+      ruleInfo.slot_id = slotValue;
+      ruleInfo.adunit = slotValue;
+      ruleInfo.normAdUnit = normAdUnit_(slotValue);
+    }
+    if (slotValue) entry.slot_id = slotValue;
+    var utmValue = coalesceForPayload_(ruleInfo.utm_source, entry.utm_source);
+    if (utmValue && idx['utm_source'] != null && String(ruleInfo.utm_source || '').trim() !== String(utmValue).trim()) {
+      sheet.getRange(ruleInfo.rowIndex, idx['utm_source'] + 1).setValue(utmValue);
+      ruleInfo.utm_source = utmValue;
+    }
+    var slugValue = coalesceForPayload_(ruleInfo.url, entry.normUrl, normUrlStrict_(entry.url));
+    if (slugValue && idx['url'] != null && String(ruleInfo.url || '').trim() !== String(slugValue).trim()) {
+      sheet.getRange(ruleInfo.rowIndex, idx['url'] + 1).setValue(slugValue);
+      ruleInfo.url = slugValue;
+    }
+    var spnValue = coalesceForPayload_(ruleInfo.spnprice_id, entry.spnprice_id);
+    if (!spnValue) {
+      spnValue = generateSpnpriceId_();
+      if (idx['spnprice_id'] != null) {
+        sheet.getRange(ruleInfo.rowIndex, idx['spnprice_id'] + 1).setValue(spnValue);
+      }
+      ruleInfo.spnprice_id = spnValue;
+    }
+    entry.spnprice_id = spnValue;
+  } else if (networkKey === 'igoal') {
+    var dominioValue = coalesceForPayload_(ruleInfo.dominio, entry.site, entry.domain_id);
+    if (dominioValue && idx['dominio'] != null && String(ruleInfo.dominio || '').trim() !== String(dominioValue).trim()) {
+      sheet.getRange(ruleInfo.rowIndex, idx['dominio'] + 1).setValue(dominioValue);
+      ruleInfo.dominio = dominioValue;
+    }
+    if (dominioValue) entry.domain_id = dominioValue;
+    var blocoValue = coalesceForPayload_(ruleInfo.bloco, ruleInfo.slot_id, entry.bloco, entry.adunit);
+    if (blocoValue && idx['bloco'] != null && String(ruleInfo.bloco || '').trim() !== String(blocoValue).trim()) {
+      sheet.getRange(ruleInfo.rowIndex, idx['bloco'] + 1).setValue(blocoValue);
+      ruleInfo.bloco = blocoValue;
+      ruleInfo.adunit = blocoValue;
+      ruleInfo.normAdUnit = normAdUnit_(blocoValue);
+    }
+    if (blocoValue) entry.bloco = blocoValue;
+    var utmValueIgoal = coalesceForPayload_(ruleInfo.utm_source, entry.utm_source);
+    if (utmValueIgoal && idx['utm_source'] != null && String(ruleInfo.utm_source || '').trim() !== String(utmValueIgoal).trim()) {
+      sheet.getRange(ruleInfo.rowIndex, idx['utm_source'] + 1).setValue(utmValueIgoal);
+      ruleInfo.utm_source = utmValueIgoal;
+    }
+    var urlValue = coalesceForPayload_(ruleInfo.url, entry.normUrl, normUrlStrict_(entry.url));
+    if (urlValue && idx['url'] != null && String(ruleInfo.url || '').trim() !== String(urlValue).trim()) {
+      sheet.getRange(ruleInfo.rowIndex, idx['url'] + 1).setValue(urlValue);
+      ruleInfo.url = urlValue;
+    }
+    var companyValue = coalesceForPayload_(ruleInfo.company_id, entry.company_id, entry.identifier);
+    if (companyValue && idx['company_id'] != null && String(ruleInfo.company_id || '').trim() !== String(companyValue).trim()) {
+      sheet.getRange(ruleInfo.rowIndex, idx['company_id'] + 1).setValue(companyValue);
+      ruleInfo.company_id = companyValue;
+    }
+    if (companyValue) entry.company_id = companyValue;
+  }
+  if (ruleInfo.wasRuleCreated) {
+    entry.wasRuleCreated = true;
+  }
+  return ruleInfo;
+}
+
 function runAutoPricing(params) {
   params = params || {};
   params.trigger = params.trigger || 'manual';
@@ -1349,17 +1547,27 @@ function runAutoPricing(params) {
       var ruleInfo = ctx.map[entry.key];
       var newValue = entry.bucketRule;
       var formatted = ctx.formatRule ? ctx.formatRule(newValue) : newValue;
+      if (!ruleInfo || !ruleInfo.rowIndex) {
+        ruleInfo = ensureRuleRowForEntry_(networkKey, ctx, entry, formatted, newValue);
+      }
+      if (ruleInfo && ruleInfo.rowIndex) {
+        ruleInfo = prepareRuleInfoForUpdate_(networkKey, ctx, entry, ruleInfo);
+      }
       var payloadLog = buildPricingPayloadLog_(networkKey, entry, ruleInfo, formatted, newValue);
       if (!ruleInfo || !ruleInfo.rowIndex) {
-        logRows.push([timestamp, params.trigger, entry.site, entry.network, entry.utm_source, entry.url, entry.currentRule, entry.bucketRule, entry.coverage, entry.ecpm, entry.coefficient, entry.bucketLabel, entry.requests, 'Regra não encontrada na aba de precificação (Bloco: ' + (entry.adunit || '-') + ')', payloadLog]);
-        entry.reason = 'Regra não encontrada na aba de precificação';
+        var failureReason = entry.reason || 'Regra não encontrada na aba de precificação (Bloco: ' + (entry.adunit || '-') + ')';
+        logRows.push([timestamp, params.trigger, entry.site, entry.network, entry.utm_source, entry.url, entry.currentRule, entry.bucketRule, entry.coverage, entry.ecpm, entry.coefficient, entry.bucketLabel, entry.requests, failureReason, payloadLog]);
+        entry.reason = failureReason;
         return;
       }
+      var previousRule = entry.wasRuleCreated ? '' : ruleInfo.price_rule;
       ctx.sheet.getRange(ruleInfo.rowIndex, priceCol + 1).setValue(formatted);
       if (syncCol != null && syncCol >= 0) {
         ctx.sheet.getRange(ruleInfo.rowIndex, syncCol + 1).setValue('Sim');
       }
-      logRows.push([timestamp, params.trigger, entry.site, entry.network, entry.utm_source, entry.url, ruleInfo.price_rule, newValue, entry.coverage, entry.ecpm, entry.coefficient, entry.bucketLabel, entry.requests, 'Atualizado via automação (Bloco: ' + (entry.adunit || '-') + ')', payloadLog]);
+      ruleInfo.price_rule = newValue;
+      var actionNote = entry.wasRuleCreated ? 'Regra criada via automação (Bloco: ' + (entry.adunit || '-') + ')' : 'Atualizado via automação (Bloco: ' + (entry.adunit || '-') + ')';
+      logRows.push([timestamp, params.trigger, entry.site, entry.network, entry.utm_source, entry.url, previousRule, newValue, entry.coverage, entry.ecpm, entry.coefficient, entry.bucketLabel, entry.requests, actionNote, payloadLog]);
     });
   });
 
