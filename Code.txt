@@ -422,18 +422,20 @@ function buildAutoPricingContext_() {
     });
   });
 
-  var combos = Object.keys(combosMap).map(function(key){ return combosMap[key]; }).filter(function(item){
-    return parseAutoPricingBoolean_(item.active);
-  });
-  combos.sort(function(a,b){
+  var combosAll = Object.keys(combosMap).map(function(key){ return combosMap[key]; });
+  combosAll.sort(function(a,b){
     var s = String(a.site || '').localeCompare(String(b.site || ''), 'pt-BR');
     if (s !== 0) return s;
     return String(a.utm_source || '').localeCompare(String(b.utm_source || ''), 'pt-BR');
   });
 
+  var combosActive = combosAll.filter(function(item){
+    return parseAutoPricingBoolean_(item && item.active);
+  });
+
   var siteOptionsMap = {};
   var utmOptionsMap = {};
-  combos.forEach(function(combo){
+  combosAll.forEach(function(combo){
     if (!siteOptionsMap[combo.normSite]) siteOptionsMap[combo.normSite] = combo.site;
     if (!utmOptionsMap[combo.normUtm]) utmOptionsMap[combo.normUtm] = combo.utm_source;
   });
@@ -447,7 +449,7 @@ function buildAutoPricingContext_() {
   if (!siteOptions.length) {
     var seenSiteFallback = {};
     (config.sites || []).forEach(function(entry){
-      if (!entry || entry.active === false) return;
+      if (!entry) return;
       var siteName = String(entry.site || '').trim();
       if (!siteName) return;
       var normSite = normSite_(siteName);
@@ -469,7 +471,7 @@ function buildAutoPricingContext_() {
   if (!utmOptions.length) {
     var seenUtmFallback = {};
     (config.sites || []).forEach(function(entry){
-      if (!entry || entry.active === false) return;
+      if (!entry) return;
       var utms = Array.isArray(entry.utmSources) ? entry.utmSources : [];
       utms.forEach(function(utm){
         var label = String(utm || '').trim();
@@ -510,7 +512,9 @@ function buildAutoPricingContext_() {
   return {
     config: config,
     ranges: ranges,
-    combos: combos,
+    combos: combosActive,
+    activeCombos: combosActive,
+    allCombos: combosAll,
     siteOptions: siteOptions,
     utmOptions: utmOptions,
     bucketMap: bucketMap
@@ -634,7 +638,8 @@ function planToState_(plan) {
 function computeAutoPricingPlan_(params) {
   params = params || {};
   var context = buildAutoPricingContext_();
-  var combos = context.combos || [];
+  var includeInactive = params.includeInactive === true;
+  var combos = includeInactive ? (context.allCombos || context.combos || []) : (context.activeCombos || context.combos || []);
   var siteFiltersRaw = [];
   if (Array.isArray(params.sites)) siteFiltersRaw = params.sites.slice();
   else if (Array.isArray(params.siteFilter)) siteFiltersRaw = params.siteFilter.slice();
@@ -1066,7 +1071,11 @@ function computeAutoPricingPlan_(params) {
 }
 
 function getAutoPricingState(params) {
-  var plan = computeAutoPricingPlan_(params);
+  var base = (params && typeof params === 'object') ? params : {};
+  var payload = {};
+  Object.keys(base).forEach(function(key){ payload[key] = base[key]; });
+  payload.includeInactive = true;
+  var plan = computeAutoPricingPlan_(payload);
   return planToState_(plan);
 }
 

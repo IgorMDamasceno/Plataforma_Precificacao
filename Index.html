@@ -28,6 +28,11 @@
     .toast-out { animation: toast-out 0.5s ease-in both; }
     @keyframes toast-in { from { opacity: 0; transform: translateX(100%); } to { opacity: 1; transform: translateX(0); } }
     @keyframes toast-out { from { opacity: 1; transform: translateX(0); } to { opacity: 0; transform: translateX(100%); } }
+    details.auto-multiselect { position: relative; display: block; }
+    details.auto-multiselect > summary { list-style: none; }
+    details.auto-multiselect > summary::-webkit-details-marker { display: none; }
+    details.auto-multiselect .auto-multiselect-panel { display: none; }
+    details.auto-multiselect[open] .auto-multiselect-panel { display: block; }
   </style>
 </head>
 <body class="text-slate-300">
@@ -99,11 +104,11 @@
           <div class="grid gap-4 md:grid-cols-2">
             <div>
               <label class="block text-xs text-slate-400 mb-1">Sites</label>
-              <select id="auto-filter-sites" multiple size="6" class="w-full pill rounded-xl px-3 py-2 text-sm bg-slate-800/60 border border-slate-600/60 focus:outline-none focus:ring-2 focus:ring-sky-500"></select>
+              <div id="auto-filter-sites"></div>
             </div>
             <div>
               <label class="block text-xs text-slate-400 mb-1">utm_source</label>
-              <select id="auto-filter-utms" multiple size="6" class="w-full pill rounded-xl px-3 py-2 text-sm bg-slate-800/60 border border-slate-600/60 focus:outline-none focus:ring-2 focus:ring-sky-500"></select>
+              <div id="auto-filter-utms"></div>
             </div>
           </div>
           <div class="grid md:grid-cols-3 gap-4 text-sm">
@@ -229,19 +234,152 @@
       primaryView: 'consulta'
     };
 
-    function getMultiSelectValues(select) {
-      if (!select) return [];
-      var values = [];
-      var selected = select.selectedOptions;
-      if (selected && typeof selected.length === 'number') {
-        values = Array.prototype.map.call(selected, function(option){ return option.value; });
-      } else {
-        Array.prototype.forEach.call(select.options || [], function(option){
-          if (option && option.selected) values.push(option.value);
+    function formatMultiSelectSummary(values, options, placeholder){
+      placeholder = placeholder || 'Selecione...';
+      var optionMap = {};
+      (options || []).forEach(function(opt){
+        if (!opt) return;
+        var val = opt.value != null ? String(opt.value) : '';
+        var label = opt.label != null ? String(opt.label) : val;
+        optionMap[val] = label;
+      });
+      var labels = [];
+      var seen = {};
+      (values || []).forEach(function(value){
+        var str = value != null ? String(value) : '';
+        if (seen[str]) return;
+        seen[str] = true;
+        var label = optionMap.hasOwnProperty(str) ? optionMap[str] : str;
+        if (label) labels.push(label);
+      });
+      if (!labels.length) return placeholder;
+      if (labels.length === (options || []).length && labels.length > 0) {
+        return labels.length === 1 ? labels[0] : 'Todos selecionados (' + labels.length + ')';
+      }
+      if (labels.length <= 2) return labels.join(', ');
+      return labels.length + ' selecionados';
+    }
+
+    function renderMultiSelectDropdown(targetId, rawOptions, selectedValues, config){
+      var container = byId(targetId);
+      if (!container) return;
+      config = config || {};
+      var placeholder = config.placeholder || 'Selecione...';
+      var emptyMessage = config.emptyMessage || 'Nenhuma opção disponível';
+      var options = (rawOptions || []).map(function(opt){
+        opt = opt || {};
+        return {
+          value: opt.value != null ? String(opt.value) : '',
+          label: opt.label != null ? String(opt.label) : '(sem valor)'
+        };
+      });
+      function normalize(values){
+        var normalized = [];
+        var seen = {};
+        (values || []).forEach(function(value){
+          var str = value != null ? String(value) : '';
+          if (seen[str]) return;
+          seen[str] = true;
+          normalized.push(str);
+        });
+        return normalized;
+      }
+      var selected = normalize(selectedValues);
+      container.innerHTML = '';
+      if (!options.length) {
+        container.innerHTML = '<div class="pill w-full rounded-xl px-3 py-2 text-sm bg-slate-800/60 border border-slate-600/60 text-slate-400">'+escapeHtml(emptyMessage)+'</div>';
+        return;
+      }
+      var details = document.createElement('details');
+      details.className = 'auto-multiselect';
+      var summary = document.createElement('summary');
+      summary.className = 'flex items-center justify-between pill w-full rounded-xl px-3 py-2 text-sm bg-slate-800/60 border border-slate-600/60 cursor-pointer select-none text-slate-200';
+      var summaryLabel = document.createElement('span');
+      summaryLabel.textContent = formatMultiSelectSummary(selected, options, placeholder);
+      var summaryIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      summaryIcon.setAttribute('class', 'w-4 h-4 text-slate-400 ml-2');
+      summaryIcon.setAttribute('viewBox', '0 0 24 24');
+      summaryIcon.setAttribute('fill', 'none');
+      summaryIcon.setAttribute('stroke-width', '1.5');
+      summaryIcon.setAttribute('stroke', 'currentColor');
+      var summaryPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      summaryPath.setAttribute('stroke-linecap', 'round');
+      summaryPath.setAttribute('stroke-linejoin', 'round');
+      summaryPath.setAttribute('d', 'M19 9l-7 7-7-7');
+      summaryIcon.appendChild(summaryPath);
+      summary.appendChild(summaryLabel);
+      summary.appendChild(summaryIcon);
+      details.appendChild(summary);
+
+      var panel = document.createElement('div');
+      panel.className = 'auto-multiselect-panel card rounded-2xl p-2 absolute left-0 right-0 mt-2 max-h-60 overflow-y-auto space-y-1 z-30';
+      var optionCheckboxes = [];
+
+      function setSelectedValues(values){
+        selected = normalize(values);
+        summaryLabel.textContent = formatMultiSelectSummary(selected, options, placeholder);
+        optionCheckboxes.forEach(function(item){
+          item.checkbox.checked = selected.indexOf(item.value) !== -1;
         });
       }
-      return values;
+
+      options.forEach(function(opt){
+        var optionLabel = document.createElement('label');
+        optionLabel.className = 'flex items-center gap-2 px-2 py-1 rounded-lg text-sm text-slate-200 hover:bg-slate-700/50 cursor-pointer';
+        var checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.value = opt.value;
+        checkbox.className = 'w-4 h-4 rounded border-slate-500 bg-slate-800/80 text-teal-500 focus:ring-emerald-500 focus:ring-offset-0';
+        optionCheckboxes.push({ value: opt.value, checkbox: checkbox });
+        checkbox.addEventListener('change', function(){
+          var next = selected.slice();
+          var idx = next.indexOf(opt.value);
+          if (this.checked && idx === -1) next.push(opt.value);
+          else if (!this.checked && idx !== -1) next.splice(idx, 1);
+          var result = (typeof config.onChange === 'function') ? config.onChange(next.slice()) : undefined;
+          if (Array.isArray(result)) {
+            setSelectedValues(result);
+          } else {
+            setSelectedValues(next);
+          }
+        });
+        var text = document.createElement('span');
+        text.textContent = opt.label;
+        optionLabel.appendChild(checkbox);
+        optionLabel.appendChild(text);
+        panel.appendChild(optionLabel);
+      });
+
+      if (config.allowClear !== false) {
+        var footer = document.createElement('div');
+        footer.className = 'pt-2 mt-2 border-t border-slate-700/40 text-right';
+        var clearBtn = document.createElement('button');
+        clearBtn.type = 'button';
+        clearBtn.className = 'text-xs text-slate-400 hover:text-slate-200';
+        clearBtn.textContent = 'Limpar seleção';
+        clearBtn.addEventListener('click', function(ev){
+          ev.preventDefault();
+          var result = (typeof config.onChange === 'function') ? config.onChange([]) : undefined;
+          if (Array.isArray(result)) {
+            setSelectedValues(result);
+          } else {
+            setSelectedValues([]);
+          }
+        });
+        footer.appendChild(clearBtn);
+        panel.appendChild(footer);
+      }
+
+      details.appendChild(panel);
+      container.appendChild(details);
+      setSelectedValues(selected);
     }
+
+    document.addEventListener('click', function(event){
+      Array.from(document.querySelectorAll('details.auto-multiselect[open]')).forEach(function(el){
+        if (!el.contains(event.target)) el.removeAttribute('open');
+      });
+    });
 
     function renderAutoConfig(){
       renderAutoConfigRanges();
@@ -433,28 +571,36 @@
     }
 
     function renderAutoPricingFilters(){
-      var siteSelect = byId('auto-filter-sites');
-      if (siteSelect) {
-        var options = AutoPricing.siteOptions || [];
-        siteSelect.innerHTML = options.map(function(opt){
-          var value = opt && opt.site ? opt.site : '';
-          var label = opt && opt.site ? opt.site : '(sem site)';
-          return '<option value="'+escapeHtml(value)+'">'+escapeHtml(label)+'</option>';
-        }).join('');
-        var selectedSites = (AutoPricing.filters && AutoPricing.filters.sites) ? AutoPricing.filters.sites : [];
-        Array.from(siteSelect.options).forEach(function(option){ option.selected = selectedSites.indexOf(option.value) !== -1; });
-      }
-      var utmSelect = byId('auto-filter-utms');
-      if (utmSelect) {
-        var utmOptions = AutoPricing.utmOptions || [];
-        utmSelect.innerHTML = utmOptions.map(function(opt){
-          var value = opt && opt.utm_source ? opt.utm_source : '';
-          var label = opt && opt.utm_source ? opt.utm_source : '(sem utm_source)';
-          return '<option value="'+escapeHtml(value)+'">'+escapeHtml(label)+'</option>';
-        }).join('');
-        var selectedUtms = (AutoPricing.filters && AutoPricing.filters.utms) ? AutoPricing.filters.utms : [];
-        Array.from(utmSelect.options).forEach(function(option){ option.selected = selectedUtms.indexOf(option.value) !== -1; });
-      }
+      var siteOptions = (AutoPricing.siteOptions || []).map(function(opt){
+        var value = opt && opt.site ? String(opt.site) : '';
+        var label = value || '(sem site)';
+        return { value: value, label: label };
+      });
+      renderMultiSelectDropdown('auto-filter-sites', siteOptions, (AutoPricing.filters && AutoPricing.filters.sites) ? AutoPricing.filters.sites : [], {
+        placeholder: 'Selecione os sites',
+        emptyMessage: 'Nenhum site configurado',
+        onChange: function(values){
+          AutoPricing.filters.sites = values.slice();
+          sanitizeAutoPricingFilters();
+          scheduleAutoPricingRefresh();
+          return (AutoPricing.filters && AutoPricing.filters.sites) ? AutoPricing.filters.sites.slice() : [];
+        }
+      });
+      var utmOptions = (AutoPricing.utmOptions || []).map(function(opt){
+        var value = opt && opt.utm_source ? String(opt.utm_source) : '';
+        var label = value || '(sem utm_source)';
+        return { value: value, label: label };
+      });
+      renderMultiSelectDropdown('auto-filter-utms', utmOptions, (AutoPricing.filters && AutoPricing.filters.utms) ? AutoPricing.filters.utms : [], {
+        placeholder: 'Selecione utm_source',
+        emptyMessage: 'Nenhum utm_source configurado',
+        onChange: function(values){
+          AutoPricing.filters.utms = values.slice();
+          sanitizeAutoPricingFilters();
+          scheduleAutoPricingRefresh();
+          return (AutoPricing.filters && AutoPricing.filters.utms) ? AutoPricing.filters.utms.slice() : [];
+        }
+      });
     }
 
     function scheduleAutoPricingRefresh(){
@@ -629,7 +775,7 @@
       if ((!AutoPricing.siteOptions || !AutoPricing.siteOptions.length) && AutoPricing.config && Array.isArray(AutoPricing.config.sites)) {
         var siteFallback = {};
         AutoPricing.config.sites.forEach(function(item){
-          if (!item || item.active === false) return;
+          if (!item) return;
           var label = String(item.site || '').trim();
           if (!label) return;
           var norm = label.toLowerCase();
@@ -644,7 +790,7 @@
       if ((!AutoPricing.utmOptions || !AutoPricing.utmOptions.length) && AutoPricing.config && Array.isArray(AutoPricing.config.sites)) {
         var utmFallback = {};
         AutoPricing.config.sites.forEach(function(item){
-          if (!item || item.active === false) return;
+          if (!item) return;
           var utms = Array.isArray(item.utmSources) ? item.utmSources : [];
           utms.forEach(function(utm){
             var label = String(utm || '').trim();
@@ -684,7 +830,7 @@
       google.script.run
         .withSuccessHandler(function(res){ hideLoading(); applyAutoPricingState(res); AutoPricing.loaded = true; })
         .withFailureHandler(function(err){ hideLoading(); var message = err && err.message ? err.message : 'Não foi possível carregar a precificação automática.'; showToast(message, 'error'); })
-        .getAutoPricingState({ sites: filters.sites, utm_sources: filters.utm_sources });
+        .getAutoPricingState({ sites: filters.sites, utm_sources: filters.utm_sources, includeInactive: true });
     }
 
     function ensureAutoPricingLoaded(){ if (AutoPricing.loaded) return; loadAutoPricingState(null, true); }
@@ -724,7 +870,9 @@
     }
 
     function runAutoPricingHandler(){
+      sanitizeAutoPricingFilters();
       var filters = { sites: AutoPricing.filters && AutoPricing.filters.sites ? AutoPricing.filters.sites : [], utm_sources: AutoPricing.filters && AutoPricing.filters.utms ? AutoPricing.filters.utms : [] };
+      var payload = { sites: filters.sites.slice(), utm_sources: filters.utm_sources.slice(), includeInactive: true };
       showLoading('Executando precificação automática...');
       google.script.run
         .withSuccessHandler(function(res){
@@ -736,7 +884,7 @@
           showToast(message, 'success');
         })
         .withFailureHandler(function(err){ hideLoading(); var message = err && err.message ? err.message : 'Não foi possível executar a precificação automática.'; showToast(message, 'error'); })
-        .runAutoPricing(filters);
+        .runAutoPricing(payload);
     }
 
     function setAutoAnalysisTab(tab){
@@ -794,18 +942,6 @@
       if (refreshBtn) refreshBtn.addEventListener('click', function(){ loadAutoPricingState(null, true); });
       var runBtn = byId('auto-btn-run');
       if (runBtn) runBtn.addEventListener('click', runAutoPricingHandler);
-      var siteSelect = byId('auto-filter-sites');
-      if (siteSelect) siteSelect.addEventListener('change', function(){
-        AutoPricing.filters.sites = getMultiSelectValues(siteSelect);
-        sanitizeAutoPricingFilters();
-        scheduleAutoPricingRefresh();
-      });
-      var utmSelect = byId('auto-filter-utms');
-      if (utmSelect) utmSelect.addEventListener('change', function(){
-        AutoPricing.filters.utms = getMultiSelectValues(utmSelect);
-        sanitizeAutoPricingFilters();
-        scheduleAutoPricingRefresh();
-      });
       var tabSite = byId('auto-tab-site');
       if (tabSite) tabSite.addEventListener('click', function(){ setAutoAnalysisTab('site'); });
       var tabUtm = byId('auto-tab-utm');
