@@ -221,13 +221,26 @@ function formatPriceRuleAdSeleto_(value) {
 
 function normUrlStrict_(u) {
   if (!u) return '';
-  var s = String(u).trim().toLowerCase();
-  s = s.replace(/^https?:\/\//,'');
-  s = s.replace(/^www\./,'');
+  var s = String(u).trim();
+  if (!s) return '';
+  s = s.replace(/^https?:\/\//i, '');
+  s = s.replace(/^www\./i, '');
   s = s.split('#')[0];
   s = s.split('?')[0];
-  s = s.replace(/\/+$/,'');
-  return s;
+  s = s.replace(/\\/g, '/');
+  s = s.replace(/\/+/g, '/');
+  var slashIndex = s.indexOf('/');
+  var slug = slashIndex >= 0 ? s.substring(slashIndex + 1) : s;
+  slug = slug.replace(/^\/+/, '').replace(/\/+$/, '');
+  if (!slug) {
+    // Se a URL representar apenas o domínio, não enviamos o domínio completo.
+    return '';
+  }
+  if (slashIndex < 0 && /\./.test(slug)) {
+    // Valores que ainda parecem um domínio inteiro são descartados.
+    return '';
+  }
+  return slug.trim().toLowerCase();
 }
 
 function normSite_(val) {
