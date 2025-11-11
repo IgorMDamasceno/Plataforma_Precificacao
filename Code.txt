@@ -164,9 +164,21 @@ function toNumber_(val) {
   if (val == null) return 0;
   var s = String(val).trim();
   if (!s) return 0;
-  s = s.replace(/\s/g,'').replace(/%/g,'');
-  s = s.replace(/\./g,'').replace(/,/g,'.');
-  var n = parseFloat(s);
+  var sanitized = s.replace(/\s/g, '').replace(/%/g, '');
+  var hasComma = sanitized.indexOf(',') !== -1;
+  var hasDot = sanitized.indexOf('.') !== -1;
+  if (hasComma && hasDot) {
+    if (sanitized.lastIndexOf(',') > sanitized.lastIndexOf('.')) {
+      sanitized = sanitized.replace(/\./g, '').replace(/,/g, '.');
+    } else {
+      sanitized = sanitized.replace(/,/g, '');
+    }
+  } else if (hasComma) {
+    sanitized = sanitized.replace(/\./g, '').replace(/,/g, '.');
+  } else {
+    sanitized = sanitized.replace(/,/g, '');
+  }
+  var n = parseFloat(sanitized);
   return isNaN(n) ? 0 : n;
 }
 
