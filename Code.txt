@@ -22,6 +22,7 @@ const HEADER_ALIASES = {
   viewability: ['Viewability']
 };
 
+const AUTO_PRICING_ALLOWED_ADUNIT_TOKENS = ['mob_top','mob_offerwall','mob_rewarded','desk_top','desk_offerwall','desk_rewarded'];
 const AUTO_PRICING_CONFIG_SHEET = 'Config - Precificação';
 const AUTO_PRICING_LOG_SHEET = 'Log - Precificação';
 const AUTO_PRICING_INTERVAL_HOURS = 3;
@@ -253,6 +254,23 @@ function normUtm_(val) {
 
 function normNetwork_(val) {
   return String(val == null ? '' : val).trim().toLowerCase();
+}
+
+function normAdUnit_(val) {
+  return String(val == null ? '' : val).trim().toLowerCase();
+}
+
+function matchesAllowedAdUnitTokens_(value) {
+  var tokens = AUTO_PRICING_ALLOWED_ADUNIT_TOKENS || [];
+  if (!tokens.length) return true;
+  var normalized = normAdUnit_(value);
+  if (!normalized) return false;
+  for (var i = 0; i < tokens.length; i++) {
+    if (normalized.indexOf(String(tokens[i] || '').toLowerCase()) !== -1) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function parseDate_(v) {
@@ -574,14 +592,18 @@ function getIgoalRuleContext_() {
       var dominio = row[idx['dominio']];
       var utm = row[idx['utm_source']];
       var url = row[idx['url']];
-      var key = normSite_(dominio) + '||' + normUtm_(utm) + '||' + normUrlStrict_(url);
+      var bloco = idx['bloco'] != null ? row[idx['bloco']] : '';
+      if (!matchesAllowedAdUnitTokens_(bloco)) return;
+      var key = normSite_(dominio) + '||' + normUtm_(utm) + '||' + normAdUnit_(bloco) + '||' + normUrlStrict_(url);
       map[key] = {
         price_rule: toNumber_(row[idx['price_rule']]),
         rowIndex: index + 2,
         dominio: dominio,
         utm_source: utm,
         url: url,
-        bloco: row[idx['bloco']],
+        bloco: bloco,
+        adunit: bloco,
+        normAdUnit: normAdUnit_(bloco),
         company_id: row[idx['company_id']],
         rule_id: row[idx['rule_id']]
       };
@@ -608,14 +630,18 @@ function getAdSeletoRuleContext_() {
       var domain = row[idx['domain_id']];
       var utm = row[idx['utm_source']];
       var url = row[idx['url']];
-      var key = normSite_(domain) + '||' + normUtm_(utm) + '||' + normUrlStrict_(url);
+      var slot = idx['slot_id'] != null ? row[idx['slot_id']] : '';
+      if (!matchesAllowedAdUnitTokens_(slot)) return;
+      var key = normSite_(domain) + '||' + normUtm_(utm) + '||' + normAdUnit_(slot) + '||' + normUrlStrict_(url);
       map[key] = {
         price_rule: toNumber_(row[idx['price_rule']]),
         rowIndex: index + 2,
         domain_id: domain,
         utm_source: utm,
         url: url,
-        slot_id: row[idx['slot_id']],
+        slot_id: slot,
+        adunit: slot,
+        normAdUnit: normAdUnit_(slot),
         spnprice_id: row[idx['spnprice_id']]
       };
     });
@@ -747,7 +773,7 @@ function computeAutoPricingPlan_(params) {
 
   var headers = data[0] || [];
   var headerIdx = mapHeadersByAlias_(headers, HEADER_ALIASES);
-  var requiredKeys = ['date', 'hour', 'site', 'channel', 'url', 'requests', 'coverage', 'ecpm', 'revenue'];
+  var requiredKeys = ['date', 'hour', 'site', 'channel', 'url', 'adunit', 'requests', 'coverage', 'ecpm', 'revenue'];
   for (var c = 0; c < requiredKeys.length; c++) {
     var key = requiredKeys[c];
     if (headerIdx[key] == null) {
@@ -766,6 +792,8 @@ function computeAutoPricingPlan_(params) {
     var siteVal = row[headerIdx.site];
     var utmVal = row[headerIdx.channel];
     var urlVal = row[headerIdx.url];
+    var adunitVal = headerIdx.adunit != null ? row[headerIdx.adunit] : '';
+    if (!matchesAllowedAdUnitTokens_(adunitVal)) return;
     var normSite = normSite_(siteVal);
     var normUtm = normUtm_(utmVal);
     var comboKey = normSite + '||' + normUtm;
@@ -785,8 +813,11 @@ function computeAutoPricingPlan_(params) {
       normUtm: normUtm,
       url: String(urlVal || ''),
       normUrl: normUrlStrict_(urlVal),
+      adunit: String(adunitVal || ''),
+      normAdUnit: normAdUnit_(adunitVal),
       network: comboInfo && comboInfo.network ? String(comboInfo.network) : '',
       normNetwork: comboInfo && comboInfo.normNetwork ? comboInfo.normNetwork : normNetwork_(comboInfo && comboInfo.network),
+      identifier: comboInfo && comboInfo.identifier ? String(comboInfo.identifier) : '',
       requests: toNumber_(row[headerIdx.requests]),
       coverage: parseCoverageValue_(row[headerIdx.coverage]),
       ecpm: toNumber_(row[headerIdx.ecpm]),
@@ -830,17 +861,20 @@ function computeAutoPricingPlan_(params) {
   var comboAgg = {};
   rows.forEach(function(row){
     if (!windowHourSet[row.ms]) return;
-    var key = row.normSite + '||' + row.normUtm + '||' + row.normUrl;
+    var key = row.normSite + '||' + row.normUtm + '||' + row.normAdUnit + '||' + row.normUrl;
     if (!comboAgg[key]) {
       comboAgg[key] = {
         site: row.site,
         normSite: row.normSite,
         utm_source: row.utm_source,
         normUtm: row.normUtm,
+        adunit: row.adunit,
+        normAdUnit: row.normAdUnit,
         network: row.network,
         normNetwork: row.normNetwork,
         url: row.url,
         normUrl: row.normUrl,
+        identifier: row.identifier,
         requests: 0,
         coverageWeighted: 0,
         ecpmWeighted: 0,
@@ -887,10 +921,19 @@ function computeAutoPricingPlan_(params) {
       normSite: agg.normSite,
       utm_source: agg.utm_source,
       normUtm: agg.normUtm,
+      adunit: agg.adunit,
+      normAdUnit: agg.normAdUnit,
       network: agg.network,
       normNetwork: agg.normNetwork,
       url: agg.url,
       normUrl: agg.normUrl,
+      identifier: agg.identifier,
+      slot_id: ruleInfo && ruleInfo.slot_id ? ruleInfo.slot_id : '',
+      bloco: ruleInfo && ruleInfo.bloco ? ruleInfo.bloco : '',
+      domain_id: ruleInfo && ruleInfo.domain_id ? ruleInfo.domain_id : (ruleInfo && ruleInfo.dominio ? ruleInfo.dominio : ''),
+      company_id: ruleInfo && ruleInfo.company_id ? ruleInfo.company_id : '',
+      rule_id: ruleInfo && ruleInfo.rule_id ? ruleInfo.rule_id : '',
+      spnprice_id: ruleInfo && ruleInfo.spnprice_id ? ruleInfo.spnprice_id : '',
       requests: requests,
       coverage: avgCoverage,
       ecpm: avgEcpm,
@@ -914,13 +957,15 @@ function computeAutoPricingPlan_(params) {
     Object.keys(ctx.map).forEach(function(key){
       if (seenKeys[key]) return;
       var parts = key.split('||');
-      if (parts.length < 3) return;
+      if (parts.length < 4) return;
       var normSite = parts[0];
       var normUtm = parts[1];
+      var normAdUnit = parts[2];
       var comboKey = normSite + '||' + normUtm;
       var comboInfo = allowedComboMap[comboKey];
       if (!comboInfo) return;
       var info = ctx.map[key];
+      var adunitLabel = info.adunit || info.bloco || info.slot_id || '';
       var networkName = comboInfo.network || '';
       entries.push({
         key: key,
@@ -928,10 +973,19 @@ function computeAutoPricingPlan_(params) {
         normSite: normSite,
         utm_source: info.utm_source || comboInfo.utm_source,
         normUtm: normUtm,
+        adunit: adunitLabel,
+        normAdUnit: normAdUnit,
         network: networkName,
         normNetwork: networkKey,
         url: info.url,
         normUrl: normUrlStrict_(info.url),
+        identifier: comboInfo.identifier || '',
+        slot_id: info.slot_id || '',
+        bloco: info.bloco || '',
+        domain_id: info.domain_id || info.dominio || '',
+        company_id: info.company_id || '',
+        rule_id: info.rule_id || '',
+        spnprice_id: info.spnprice_id || '',
         requests: 0,
         coverage: 0,
         ecpm: 0,
@@ -954,6 +1008,8 @@ function computeAutoPricingPlan_(params) {
     if (siteCmp !== 0) return siteCmp;
     var utmCmp = String(a.utm_source || '').localeCompare(String(b.utm_source || ''), 'pt-BR');
     if (utmCmp !== 0) return utmCmp;
+    var adunitCmp = String(a.adunit || '').localeCompare(String(b.adunit || ''), 'pt-BR');
+    if (adunitCmp !== 0) return adunitCmp;
     return String(a.url || '').localeCompare(String(b.url || ''), 'pt-BR');
   });
 
@@ -1215,7 +1271,7 @@ function runAutoPricing(params) {
     updates.filter(function(entry){ return entry.normNetwork === networkKey; }).forEach(function(entry){
       var ruleInfo = ctx.map[entry.key];
       if (!ruleInfo || !ruleInfo.rowIndex) {
-        logRows.push([timestamp, params.trigger, entry.site, entry.network, entry.utm_source, entry.url, entry.currentRule, entry.bucketRule, entry.coverage, entry.ecpm, entry.coefficient, entry.bucketLabel, entry.requests, 'Regra não encontrada na aba de precificação']);
+        logRows.push([timestamp, params.trigger, entry.site, entry.network, entry.utm_source, entry.url, entry.currentRule, entry.bucketRule, entry.coverage, entry.ecpm, entry.coefficient, entry.bucketLabel, entry.requests, 'Regra não encontrada na aba de precificação (Bloco: ' + (entry.adunit || '-') + ')']);
         entry.reason = 'Regra não encontrada na aba de precificação';
         return;
       }
@@ -1225,7 +1281,7 @@ function runAutoPricing(params) {
       if (syncCol != null && syncCol >= 0) {
         ctx.sheet.getRange(ruleInfo.rowIndex, syncCol + 1).setValue('Sim');
       }
-      logRows.push([timestamp, params.trigger, entry.site, entry.network, entry.utm_source, entry.url, ruleInfo.price_rule, newValue, entry.coverage, entry.ecpm, entry.coefficient, entry.bucketLabel, entry.requests, 'Atualizado via automação']);
+      logRows.push([timestamp, params.trigger, entry.site, entry.network, entry.utm_source, entry.url, ruleInfo.price_rule, newValue, entry.coverage, entry.ecpm, entry.coefficient, entry.bucketLabel, entry.requests, 'Atualizado via automação (Bloco: ' + (entry.adunit || '-') + ')']);
     });
   });
 

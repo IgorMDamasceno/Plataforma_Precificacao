@@ -713,6 +713,7 @@
               '<td class="py-2 px-2 text-slate-200">'+escapeHtml(entry.site || '')+'</td>'+
               '<td class="py-2 px-2 text-slate-300">'+escapeHtml(entry.utm_source || '')+'</td>'+
               '<td class="py-2 px-2 text-slate-300">'+network+'</td>'+
+              '<td class="py-2 px-2 text-slate-300">'+escapeHtml(entry.adunit || '')+'</td>'+
               '<td class="py-2 px-2 text-slate-300">'+escapeHtml(entry.url || '')+'</td>'+
               '<td class="py-2 px-2 text-right">'+requests+'</td>'+
               '<td class="py-2 px-2 text-right">'+coverage+'</td>'+
@@ -723,7 +724,7 @@
               '<td class="py-2 px-2"><span class="'+status.className+'">'+status.label+'</span></td>'+
             '</tr>';
           }).join('');
-          detailHtml = '<div class="pt-4 border-t border-slate-700/50 space-y-3"><div class="flex flex-wrap items-center justify-between gap-2"><h4 class="text-sm font-semibold text-slate-200">Detalhe por URL</h4><p class="text-xs text-slate-400">Marque as URLs que deseja sincronizar manualmente.</p></div><div class="overflow-auto"><table class="w-full text-sm pricing-table"><thead class="text-slate-400"><tr><th class="text-center font-semibold py-2 px-2 w-14">Selecionar</th><th class="text-left font-semibold py-2 px-2">Site</th><th class="text-left font-semibold py-2 px-2">utm_source</th><th class="text-left font-semibold py-2 px-2">Rede</th><th class="text-left font-semibold py-2 px-2">URL</th><th class="text-right font-semibold py-2 px-2">Solicitações</th><th class="text-right font-semibold py-2 px-2">Cobertura</th><th class="text-right font-semibold py-2 px-2">eCPM</th><th class="text-right font-semibold py-2 px-2">Coeficiente</th><th class="text-right font-semibold py-2 px-2">Regra atual</th><th class="text-right font-semibold py-2 px-2">Nova regra</th><th class="text-left font-semibold py-2 px-2">Status</th></tr></thead><tbody>'+detailTable+'</tbody></table></div></div>';
+          detailHtml = '<div class="pt-4 border-t border-slate-700/50 space-y-3"><div class="flex flex-wrap items-center justify-between gap-2"><h4 class="text-sm font-semibold text-slate-200">Detalhe por URL</h4><p class="text-xs text-slate-400">Marque as URLs que deseja sincronizar manualmente.</p></div><div class="overflow-auto"><table class="w-full text-sm pricing-table"><thead class="text-slate-400"><tr><th class="text-center font-semibold py-2 px-2 w-14">Selecionar</th><th class="text-left font-semibold py-2 px-2">Site</th><th class="text-left font-semibold py-2 px-2">utm_source</th><th class="text-left font-semibold py-2 px-2">Rede</th><th class="text-left font-semibold py-2 px-2">Bloco</th><th class="text-left font-semibold py-2 px-2">URL</th><th class="text-right font-semibold py-2 px-2">Solicitações</th><th class="text-right font-semibold py-2 px-2">Cobertura</th><th class="text-right font-semibold py-2 px-2">eCPM</th><th class="text-right font-semibold py-2 px-2">Coeficiente</th><th class="text-right font-semibold py-2 px-2">Regra atual</th><th class="text-right font-semibold py-2 px-2">Nova regra</th><th class="text-left font-semibold py-2 px-2">Status</th></tr></thead><tbody>'+detailTable+'</tbody></table></div></div>';
         }
         utmContainer.innerHTML = aggregatedHtml + detailHtml;
       }
