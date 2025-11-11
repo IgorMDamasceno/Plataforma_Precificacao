@@ -300,7 +300,6 @@ function buildPricingPayloadLog_(networkKey, entry, ruleInfo, formattedRuleValue
   var payload;
   if (networkKey === 'adseleto') {
     payload = {
-      domain_id: coalesceForPayload_(ruleInfo.domain_id, entry.domain_id, entry.site),
       price_rule: priceRuleValue,
       utm_source: coalesceForPayload_(ruleInfo.utm_source, entry.utm_source),
       slot_id: coalesceForPayload_(ruleInfo.slot_id, entry.slot_id, entry.adunit),
